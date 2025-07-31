@@ -141,6 +141,8 @@ struct ContentView: View {
         .frame(width: 300, height: 400)
         .sheet(isPresented: $showingSettings) {
             SettingsView(viewModel: viewModel)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
         }
         .task {
             // Initial setup
@@ -186,6 +188,7 @@ struct SettingsView: View {
     @State private var showingAPIKeyInfo = false
     @State private var configurationMessage: String = ""
     @State private var showingSuccess = false
+    @FocusState private var isAPIKeyFieldFocused: Bool
     @State private var isAuthenticatingTeams = false
     
     private var settingsHeader: some View {
@@ -230,6 +233,7 @@ struct SettingsView: View {
                 SecureField("API Key", text: $goveeAPIKey)
                     .textFieldStyle(.roundedBorder)
                     .disabled(isConfiguring)
+                    .focused($isAPIKeyFieldFocused)
                 
                 Button(action: {
                     showingAPIKeyInfo = true
