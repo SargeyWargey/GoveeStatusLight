@@ -11,8 +11,8 @@ import AuthenticationServices
 
 // MARK: - Microsoft Graph Configuration
 struct MicrosoftGraphConfig {
-    static let clientId = "YOUR_CLIENT_ID" // To be configured in Azure Portal
-    static let redirectURI = "msauth.com.yourname.goveeteamssync://auth"
+    static let clientId = "5d8ef8c6-cae4-43e8-bf39-a8001529fe51" // Your Azure app client ID
+    static let redirectURI = "msauth.com.sargey.goveeteamssync://auth"
     static let scopes = [
         "https://graph.microsoft.com/Presence.Read",
         "https://graph.microsoft.com/Calendars.Read",
@@ -171,7 +171,7 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
     func authenticate() async throws {
         connectionSubject.send(.connecting)
         
-        guard MicrosoftGraphConfig.clientId != "YOUR_CLIENT_ID" else {
+        guard MicrosoftGraphConfig.clientId != "5d8ef8c6-cae4-43e8-bf39-a8001529fe51" else {
             connectionSubject.send(.error("Client ID not configured. Please set up Azure app registration."))
             throw MicrosoftGraphError.configurationError
         }
@@ -186,7 +186,7 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
             DispatchQueue.main.async {
                 let session = ASWebAuthenticationSession(
                     url: authURL,
-                    callbackURLScheme: "msauth.com.yourname.goveeteamssync"
+                    callbackURLScheme: "msauth.com.sargey.goveeteamssync"
                 ) { [weak self] callbackURL, error in
                     if let error = error {
                         self?.connectionSubject.send(.error("Authentication failed: \(error.localizedDescription)"))
