@@ -108,3 +108,27 @@ StatusLight/
 - Use `@MainActor` for UI updates in async contexts
 - Services use protocol abstractions for testing
 - All external dependencies properly abstracted
+
+## MCP Integration
+
+### Context7 Server
+Context7 MCP server is configured to provide up-to-date API documentation during development:
+
+**Features:**
+- Real-time library documentation
+- Version-specific code examples
+- Direct API reference integration
+
+**Usage in Prompts:**
+```
+Create Teams authentication with Microsoft Graph SDK. use context7
+```
+
+**Available Libraries:**
+- Microsoft Graph SDK for Swift
+- SwiftUI documentation
+- Govee API examples
+- macOS development guides
+
+**Configuration Location:**
+`~/Library/Application Support/Claude/claude_desktop_config.json`
