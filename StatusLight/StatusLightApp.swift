@@ -10,8 +10,10 @@ import SwiftUI
 @main
 struct StatusLightApp: App {
     var body: some Scene {
-        WindowGroup {
+        // StatusLight MenuBarExtra - primary interface
+        MenuBarExtra("StatusLight", systemImage: "lightbulb.fill") {
             ContentView()
         }
+        .menuBarExtraStyle(.window)
     }
 }
