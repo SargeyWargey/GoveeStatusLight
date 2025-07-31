@@ -14,6 +14,7 @@ protocol TeamsServiceProtocol {
     var connectionStatus: AnyPublisher<ConnectionStatus, Never> { get }
     
     func authenticate() async throws
+    func signOut() async throws
     func refreshStatus() async throws
     func startMonitoring()
     func stopMonitoring()
@@ -82,6 +83,11 @@ class TeamsService: TeamsServiceProtocol, ObservableObject {
         startMonitoring()
     }
     
+    func signOut() async throws {
+        stopMonitoring()
+        try await microsoftGraphService.signOut()
+    }
+    
     func refreshStatus() async throws {
         try await microsoftGraphService.refreshPresence()
     }
@@ -108,7 +114,14 @@ class TeamsService: TeamsServiceProtocol, ObservableObject {
     }
     
     private func setupAuthentication() {
-        // The Microsoft Graph service handles token checking
+        // Check if we have stored tokens and start monitoring if authenticated
+        microsoftGraphService.isAuthenticated
+            .sink { [weak self] isAuthenticated in
+                if isAuthenticated {
+                    self?.startMonitoring()
+                }
+            }
+            .store(in: &cancellables)
     }
 }
 

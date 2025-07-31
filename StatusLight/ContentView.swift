@@ -176,29 +176,339 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Settings View Placeholder
+// MARK: - Settings View
 struct SettingsView: View {
     @ObservedObject var viewModel: StatusLightViewModel
     @Environment(\.dismiss) private var dismiss
     
-    var body: some View {
-        VStack {
-            Text("Settings")
-                .font(.title)
-                .padding()
+    @State private var goveeAPIKey: String = ""
+    @State private var isConfiguring = false
+    @State private var showingAPIKeyInfo = false
+    @State private var configurationMessage: String = ""
+    @State private var showingSuccess = false
+    @State private var isAuthenticatingTeams = false
+    
+    private var settingsHeader: some View {
+        Text("Settings")
+            .font(.title)
+            .padding(.bottom, 10)
+    }
+    
+    private var goveeConfigurationSection: some View {
+        GroupBox("Govee API Configuration") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("API Key Status:")
+                        .fontWeight(.medium)
+                    Spacer()
+                    statusIndicator
+                }
+                
+                if !viewModel.isGoveeConnected {
+                    goveeNotConnectedView
+                } else {
+                    goveeConnectedView
+                }
+                
+                if !configurationMessage.isEmpty {
+                    Text(configurationMessage)
+                        .font(.caption)
+                        .foregroundColor(showingSuccess ? .green : .red)
+                        .padding(.top, 4)
+                }
+            }
+            .padding()
+        }
+    }
+    
+    private var goveeNotConnectedView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Enter your Govee API Key:")
+                .font(.subheadline)
             
-            Text("Settings interface coming soon...")
+            HStack {
+                SecureField("API Key", text: $goveeAPIKey)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(isConfiguring)
+                
+                Button(action: {
+                    showingAPIKeyInfo = true
+                }) {
+                    Image(systemName: "questionmark.circle")
+                }
+                .help("How to get your Govee API Key")
+            }
+            
+            HStack {
+                Button("Configure API Key") {
+                    configureGoveeAPIKey()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(goveeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isConfiguring)
+                
+                if isConfiguring {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                }
+            }
+        }
+    }
+    
+    private var goveeConnectedView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                Text("API Key configured successfully")
+                    .foregroundColor(.green)
+            }
+            
+            Button("Remove API Key") {
+                removeGoveeAPIKey()
+            }
+            .buttonStyle(.bordered)
+            .foregroundColor(.red)
+        }
+    }
+    
+    private var teamsIntegrationSection: some View {
+        GroupBox("Microsoft Teams Integration") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Teams Status:")
+                        .fontWeight(.medium)
+                    Spacer()
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(viewModel.isTeamsConnected ? .green : .orange)
+                            .frame(width: 8, height: 8)
+                        Text(viewModel.isTeamsConnected ? "Connected" : "Mock Data")
+                            .font(.caption)
+                    }
+                }
+                
+                if !viewModel.isTeamsConnected {
+                    teamsNotConnectedView
+                } else {
+                    teamsConnectedView
+                }
+                
+                if viewModel.errorMessage?.contains("Client ID not configured") == true {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("⚠️ Azure Configuration Required")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.orange)
+                        Text("To use live Microsoft Teams data, you need to configure the Azure app registration. The current setup uses a placeholder Client ID.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                } else {
+                    Text("Microsoft Teams integration provides real-time presence and calendar data.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding()
+        }
+    }
+    
+    private var teamsNotConnectedView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Sign in to Microsoft Teams to get live presence data and calendar integration.")
+                .font(.subheadline)
                 .foregroundColor(.secondary)
+            
+            Button("Sign in to Microsoft Teams") {
+                authenticateWithTeams()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isAuthenticatingTeams)
+            
+            if isAuthenticatingTeams {
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Authenticating...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+    }
+    
+    private var teamsConnectedView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                Text("Connected to Microsoft Teams")
+                    .foregroundColor(.green)
+            }
+            
+            Text("Receiving live presence and calendar data")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            
+            Button("Sign Out") {
+                signOutFromTeams()
+            }
+            .buttonStyle(.bordered)
+            .foregroundColor(.red)
+        }
+    }
+    
+    private var devicesSection: some View {
+        GroupBox("Connected Devices") {
+            VStack(alignment: .leading, spacing: 8) {
+                if viewModel.selectedDevices.isEmpty {
+                    Text("No devices discovered yet")
+                        .foregroundColor(.secondary)
+                    Text("Configure your Govee API key to discover devices")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(viewModel.selectedDevices, id: \.id) { device in
+                        HStack {
+                            Circle()
+                                .fill(device.isConnected ? .green : .red)
+                                .frame(width: 8, height: 8)
+                            VStack(alignment: .leading) {
+                                Text(device.deviceName)
+                                    .fontWeight(.medium)
+                                Text(device.sku)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                        }
+                    }
+                }
+            }
+            .padding()
+        }
+    }
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            settingsHeader
+            
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    goveeConfigurationSection
+                    teamsIntegrationSection
+                    devicesSection
+                }
+                .padding(.horizontal)
+            }
             
             Spacer()
             
+            // Close Button
             Button("Close") {
                 dismiss()
             }
             .buttonStyle(.borderedProminent)
         }
         .padding()
-        .frame(width: 400, height: 300)
+        .frame(width: 500, height: 600)
+        .alert("How to Get Your Govee API Key", isPresented: $showingAPIKeyInfo) {
+            Button("OK") { }
+        } message: {
+            Text("1. Open the Govee Home App\\n2. Go to Profile → Settings\\n3. Select 'Apply for API Key'\\n4. Fill in your information\\n5. Check your email for the API key\\n\\nNote: You can only have one active API key at a time.")
+        }
+    }
+    
+    private var statusIndicator: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(viewModel.isGoveeConnected ? .green : .red)
+                .frame(width: 8, height: 8)
+            Text(viewModel.isGoveeConnected ? "Connected" : "Not Configured")
+                .font(.caption)
+        }
+    }
+    
+    private func configureGoveeAPIKey() {
+        isConfiguring = true
+        configurationMessage = ""
+        showingSuccess = false
+        
+        Task {
+            do {
+                try await viewModel.configureGoveeAPIKey(goveeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines))
+                
+                await MainActor.run {
+                    configurationMessage = "API Key configured successfully!"
+                    showingSuccess = true
+                    goveeAPIKey = "" // Clear the field for security
+                    isConfiguring = false
+                }
+                
+                // Auto-clear success message after 3 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    configurationMessage = ""
+                }
+                
+            } catch {
+                await MainActor.run {
+                    configurationMessage = "Failed to configure API Key: \\(error.localizedDescription)"
+                    showingSuccess = false
+                    isConfiguring = false
+                }
+                
+                // Auto-clear error message after 5 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                    configurationMessage = ""
+                }
+            }
+        }
+    }
+    
+    private func removeGoveeAPIKey() {
+        Task {
+            do {
+                try await viewModel.removeGoveeAPIKey()
+                await MainActor.run {
+                    configurationMessage = "API Key removed successfully"
+                    showingSuccess = true
+                }
+                
+                // Auto-clear message after 3 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    configurationMessage = ""
+                }
+                
+            } catch {
+                await MainActor.run {
+                    configurationMessage = "Failed to remove API Key: \\(error.localizedDescription)"
+                    showingSuccess = false
+                }
+                
+                // Auto-clear error message after 5 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                    configurationMessage = ""
+                }
+            }
+        }
+    }
+    
+    private func authenticateWithTeams() {
+        isAuthenticatingTeams = true
+        
+        Task {
+            await viewModel.authenticateTeams()
+            
+            await MainActor.run {
+                isAuthenticatingTeams = false
+            }
+        }
+    }
+    
+    private func signOutFromTeams() {
+        Task {
+            await viewModel.signOutFromTeams()
+        }
     }
 }
 

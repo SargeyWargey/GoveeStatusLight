@@ -43,6 +43,11 @@ class StatusLightViewModel: ObservableObject {
         
         setupSubscriptions()
         startLightingEngine()
+        
+        // Initialize services
+        Task {
+            await goveeService.loadStoredAPIKey()
+        }
     }
     
     deinit {
@@ -60,13 +65,60 @@ class StatusLightViewModel: ObservableObject {
         }
     }
     
+    func signOutFromTeams() async {
+        do {
+            try await teamsService.signOut()
+            await MainActor.run {
+                self.currentTeamsStatus = nil
+                self.lastStatusChange = nil
+            }
+        } catch {
+            await MainActor.run {
+                self.errorMessage = "Failed to sign out from Teams: \(error.localizedDescription)"
+            }
+        }
+    }
+    
     func authenticateGovee(apiKey: String) async {
         do {
-            try await goveeService.authenticate(apiKey: apiKey)
+            try await goveeService.configureAPIKey(apiKey)
             try await goveeService.discoverDevices()
         } catch {
             await MainActor.run {
                 self.errorMessage = "Failed to authenticate with Govee: \(error.localizedDescription)"
+            }
+        }
+    }
+    
+    func configureGoveeAPIKey(_ apiKey: String) async throws {
+        do {
+            try await goveeService.configureAPIKey(apiKey)
+            try await goveeService.discoverDevices()
+        } catch {
+            await MainActor.run {
+                self.errorMessage = "Failed to configure Govee API key: \(error.localizedDescription)"
+            }
+            throw error
+        }
+    }
+    
+    func removeGoveeAPIKey() async throws {
+        do {
+            try await goveeService.removeAPIKey()
+        } catch {
+            await MainActor.run {
+                self.errorMessage = "Failed to remove Govee API key: \(error.localizedDescription)"
+            }
+            throw error
+        }
+    }
+    
+    private func refreshGoveeConnection() async {
+        do {
+            try await goveeService.discoverDevices()
+        } catch {
+            await MainActor.run {
+                self.errorMessage = "Failed to refresh Govee connection: \(error.localizedDescription)"
             }
         }
     }
@@ -141,6 +193,19 @@ class StatusLightViewModel: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] status in
                 self?.isGoveeConnected = status == .connected
+            }
+            .store(in: &cancellables)
+        
+        // Govee configuration status
+        goveeService.isConfigured
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isConfigured in
+                if isConfigured && self?.isGoveeConnected == false {
+                    // API key is configured but connection failed, update status
+                    Task {
+                        await self?.refreshGoveeConnection()
+                    }
+                }
             }
             .store(in: &cancellables)
         

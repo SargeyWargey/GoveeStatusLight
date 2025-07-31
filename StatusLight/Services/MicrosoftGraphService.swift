@@ -171,12 +171,28 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
     func authenticate() async throws {
         connectionSubject.send(.connecting)
         
-        guard MicrosoftGraphConfig.clientId != "5d8ef8c6-cae4-43e8-bf39-a8001529fe51" else {
+        guard !MicrosoftGraphConfig.clientId.isEmpty && MicrosoftGraphConfig.clientId != "YOUR_ACTUAL_CLIENT_ID_HERE" else {
             connectionSubject.send(.error("Client ID not configured. Please set up Azure app registration."))
             throw MicrosoftGraphError.configurationError
         }
         
         try await performOAuthFlow()
+    }
+    
+    func signOut() async throws {
+        // Clear tokens from memory
+        self.accessToken = nil
+        self.refreshToken = nil
+        self.tokenExpirationDate = nil
+        
+        // Clear tokens from keychain
+        try KeychainService.delete(forAccount: KeychainService.Accounts.microsoftAccessToken)
+        try KeychainService.delete(forAccount: KeychainService.Accounts.microsoftRefreshToken)
+        
+        // Update subjects
+        authenticationSubject.send(false)
+        connectionSubject.send(.disconnected)
+        statusSubject.send(nil)
     }
     
     private func performOAuthFlow() async throws {
@@ -281,52 +297,30 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
     private func storeTokensSecurely() throws {
         guard let accessToken = accessToken else { return }
         
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "StatusLight-MSGraph",
-            kSecAttrAccount as String: "access_token",
-            kSecValueData as String: accessToken.data(using: .utf8)!,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        ]
-        
-        // Delete existing item
-        SecItemDelete(query as CFDictionary)
-        
-        // Add new item
-        let status = SecItemAdd(query as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw MicrosoftGraphError.keychainError
-        }
-        
-        // Store refresh token similarly
-        if let refreshToken = refreshToken {
-            var refreshQuery = query
-            refreshQuery[kSecAttrAccount as String] = "refresh_token"
-            refreshQuery[kSecValueData as String] = refreshToken.data(using: .utf8)!
+        do {
+            try KeychainService.store(accessToken, forAccount: KeychainService.Accounts.microsoftAccessToken)
             
-            SecItemDelete(refreshQuery as CFDictionary)
-            SecItemAdd(refreshQuery as CFDictionary, nil)
+            if let refreshToken = refreshToken {
+                try KeychainService.store(refreshToken, forAccount: KeychainService.Accounts.microsoftRefreshToken)
+            }
+        } catch {
+            throw MicrosoftGraphError.keychainError
         }
     }
     
     private func loadStoredTokens() {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "StatusLight-MSGraph",
-            kSecAttrAccount as String: "access_token",
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        
-        if status == errSecSuccess,
-           let data = result as? Data,
-           let token = String(data: data, encoding: .utf8) {
-            self.accessToken = token
-            authenticationSubject.send(true)
-            connectionSubject.send(.connected)
+        do {
+            if let accessToken = try KeychainService.retrieve(forAccount: KeychainService.Accounts.microsoftAccessToken) {
+                self.accessToken = accessToken
+                authenticationSubject.send(true)
+                connectionSubject.send(.connected)
+            }
+            
+            if let refreshToken = try KeychainService.retrieve(forAccount: KeychainService.Accounts.microsoftRefreshToken) {
+                self.refreshToken = refreshToken
+            }
+        } catch {
+            print("Failed to load stored tokens: \(error.localizedDescription)")
         }
     }
     
@@ -409,9 +403,49 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
     }
     
     private func refreshTokenIfNeeded() async throws {
-        // Implementation for token refresh using refresh_token
-        // This would follow similar pattern to initial token exchange
-        throw MicrosoftGraphError.authenticationExpired
+        guard let refreshToken = refreshToken else {
+            throw MicrosoftGraphError.authenticationExpired
+        }
+        
+        let tokenURL = URL(string: "\(MicrosoftGraphConfig.authority)/oauth2/v2.0/token")!
+        var request = URLRequest(url: tokenURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        
+        let body = [
+            "client_id": MicrosoftGraphConfig.clientId,
+            "refresh_token": refreshToken,
+            "grant_type": "refresh_token",
+            "scope": MicrosoftGraphConfig.scopes.joined(separator: " ")
+        ].map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+         .joined(separator: "&")
+        
+        request.httpBody = body.data(using: .utf8)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            // If refresh fails, clear stored tokens and require re-authentication
+            self.accessToken = nil
+            self.refreshToken = nil
+            self.tokenExpirationDate = nil
+            try? KeychainService.delete(forAccount: KeychainService.Accounts.microsoftAccessToken)
+            try? KeychainService.delete(forAccount: KeychainService.Accounts.microsoftRefreshToken)
+            authenticationSubject.send(false)
+            connectionSubject.send(.disconnected)
+            throw MicrosoftGraphError.authenticationExpired
+        }
+        
+        let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: data)
+        
+        self.accessToken = tokenResponse.accessToken
+        if let newRefreshToken = tokenResponse.refreshToken {
+            self.refreshToken = newRefreshToken
+        }
+        self.tokenExpirationDate = Date().addingTimeInterval(TimeInterval(tokenResponse.expiresIn))
+        
+        try storeTokensSecurely()
     }
 }
 
