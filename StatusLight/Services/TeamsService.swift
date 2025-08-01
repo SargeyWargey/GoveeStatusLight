@@ -95,30 +95,76 @@ class TeamsService: TeamsServiceProtocol, ObservableObject {
     func startMonitoring() {
         stopMonitoring() // Stop any existing monitoring
         
-        // Poll for status updates every 30 seconds to respect Microsoft Graph rate limits
-        monitoringTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
-            Task {
-                try? await self?.refreshStatus()
+        print("🚀 TeamsService: Starting 15-second monitoring cycle")
+        
+        // Get initial status and then start the restart cycle
+        Task {
+            do {
+                try await refreshStatus()
+                print("✅ TeamsService: Initial status fetch completed")
+                await startRestartCycle()
+            } catch {
+                print("❌ TeamsService: Initial status fetch failed: \(error.localizedDescription)")
+                await startRestartCycle() // Still start the cycle even if initial fetch fails
             }
         }
+    }
+    
+    private func startRestartCycle() async {
+        print("🔄 TeamsService: Starting 15-second restart cycle")
         
-        // Get initial status
-        Task {
-            try? await refreshStatus()
+        // Create a timer that restarts the entire monitoring process every 15 seconds
+        await MainActor.run {
+            monitoringTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] timer in
+                print("🔄 TeamsService: 15-second restart cycle triggered (valid: \(timer.isValid))")
+                print("🚀 TeamsService: Restarting Teams monitoring cycle...")
+                
+                Task { [weak self] in
+                    do {
+                        // Stop current monitoring (but don't invalidate the restart timer)
+                        await MainActor.run {
+                            // Don't call stopMonitoring() here as it would stop this timer
+                            print("🔄 TeamsService: Refreshing Teams status...")
+                        }
+                        
+                        // Fetch fresh status
+                        try await self?.refreshStatus()
+                        print("✅ TeamsService: Restart cycle status fetch completed")
+                        
+                    } catch {
+                        print("❌ TeamsService: Restart cycle failed: \(error.localizedDescription)")
+                    }
+                }
+            }
+            
+            // Ensure timer runs on main run loop with common modes to prevent pausing
+            RunLoop.main.add(monitoringTimer!, forMode: .common)
+            print("✅ TeamsService: 15-second restart cycle timer started")
         }
     }
     
     func stopMonitoring() {
-        monitoringTimer?.invalidate()
-        monitoringTimer = nil
+        if monitoringTimer != nil {
+            print("🛑 TeamsService: Stopping 15-second polling timer")
+            monitoringTimer?.invalidate()
+            monitoringTimer = nil
+            print("✅ TeamsService: Timer stopped successfully")
+        } else {
+            print("ℹ️ TeamsService: No timer to stop")
+        }
     }
     
     private func setupAuthentication() {
         // Check if we have stored tokens and start monitoring if authenticated
         microsoftGraphService.isAuthenticated
             .sink { [weak self] isAuthenticated in
+                print("🔑 TeamsService: Authentication status changed to: \(isAuthenticated)")
                 if isAuthenticated {
+                    print("🚀 TeamsService: User is authenticated, starting 15-second monitoring...")
                     self?.startMonitoring()
+                } else {
+                    print("🛑 TeamsService: User not authenticated, stopping monitoring")
+                    self?.stopMonitoring()
                 }
             }
             .store(in: &cancellables)

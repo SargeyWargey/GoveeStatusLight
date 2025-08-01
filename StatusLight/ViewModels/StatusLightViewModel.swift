@@ -293,8 +293,8 @@ class StatusLightViewModel: ObservableObject {
     }
     
     private func startLightingEngine() {
-        // Update lights every 30 seconds to catch status changes
-        lightingTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+        // Update lights every 15 seconds to catch status changes
+        lightingTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 await self?.updateLights()
             }
@@ -326,13 +326,14 @@ class StatusLightViewModel: ObservableObject {
             currentLightColor = targetColor
             
             print("🎨 StatusLightViewModel: Color changed! Sending commands to \(selectedDevices.count) devices...")
+            print("🎨 TERMINAL COLOR LOG: Lights changing from RGB(\(currentLightColor?.r ?? 0),\(currentLightColor?.g ?? 0),\(currentLightColor?.b ?? 0)) to RGB(\(targetColor.r),\(targetColor.g),\(targetColor.b))")
             
             // Update all selected devices
             for device in selectedDevices {
                 do {
                     print("📡 StatusLightViewModel: Sending color RGB(\(targetColor.r),\(targetColor.g),\(targetColor.b)) to \(device.deviceName)")
                     try await goveeService.controlDevice(device, color: targetColor)
-                    print("✅ StatusLightViewModel: Successfully sent color to \(device.deviceName)")
+                    print("✅ TERMINAL COLOR LOG: Successfully changed \(device.deviceName) to RGB(\(targetColor.r),\(targetColor.g),\(targetColor.b))")
                 } catch {
                     print("❌ StatusLightViewModel: Failed to update \(device.deviceName): \(error.localizedDescription)")
                     await MainActor.run {
@@ -341,7 +342,7 @@ class StatusLightViewModel: ObservableObject {
                 }
             }
         } else {
-            print("💡 StatusLightViewModel: Color unchanged, skipping update")
+            print("💡 StatusLightViewModel: Color unchanged RGB(\(targetColor.r),\(targetColor.g),\(targetColor.b)), skipping update")
         }
     }
     
@@ -397,8 +398,16 @@ class StatusLightViewModel: ObservableObject {
         }
         
         do {
-            print("🔍 Starting Govee device discovery...")
-            try await goveeService.discoverDevices()
+            print("🔄 Starting refresh: Teams status + Govee devices...")
+            
+            // Refresh both Teams status and Govee devices in parallel
+            async let teamsRefresh: () = teamsService.refreshStatus()
+            async let goveeRefresh: () = goveeService.discoverDevices()
+            
+            try await teamsRefresh
+            print("✅ Teams status refresh completed successfully")
+            
+            try await goveeRefresh
             print("✅ Govee device discovery completed successfully")
             
             // Check if devices were loaded - we can't access .value directly on AnyPublisher
@@ -408,9 +417,9 @@ class StatusLightViewModel: ObservableObject {
                 self.isRefreshingDevices = false
             }
         } catch {
-            print("❌ Govee device discovery failed: \(error.localizedDescription)")
+            print("❌ Refresh failed: \(error.localizedDescription)")
             await MainActor.run {
-                self.errorMessage = "Failed to refresh Govee devices: \(error.localizedDescription)"
+                self.errorMessage = "Failed to refresh: \(error.localizedDescription)"
                 self.isRefreshingDevices = false
             }
         }

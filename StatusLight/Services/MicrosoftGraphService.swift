@@ -332,11 +332,19 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
     
     // MARK: - API Calls
     func refreshPresence() async throws {
+        print("🔄 MicrosoftGraphService: Starting Teams status polling attempt...")
+        print("📊 MicrosoftGraphService: Checking token validity...")
+        
         if !isTokenValid() {
+            print("🔄 MicrosoftGraphService: Token expired, refreshing...")
             try await refreshTokenIfNeeded()
+            print("✅ MicrosoftGraphService: Token refreshed successfully")
+        } else {
+            print("✅ MicrosoftGraphService: Token is valid, proceeding with API call")
         }
         
         guard let accessToken = accessToken else {
+            print("❌ MicrosoftGraphService: No access token available")
             throw MicrosoftGraphError.notAuthenticated
         }
         
@@ -345,31 +353,61 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
+        print("📡 MicrosoftGraphService: Sending GET request to \(url.absoluteString)")
+        let startTime = Date()
+        
         let (data, response) = try await URLSession.shared.data(for: request)
         
+        let requestDuration = Date().timeIntervalSince(startTime)
+        print("⏱️ MicrosoftGraphService: API request completed in \(String(format: "%.2f", requestDuration))s")
+        
         guard let httpResponse = response as? HTTPURLResponse else {
+            print("❌ MicrosoftGraphService: Invalid HTTP response received")
             throw MicrosoftGraphError.invalidResponse
         }
         
+        print("📨 MicrosoftGraphService: Received HTTP \(httpResponse.statusCode) response")
+        
         switch httpResponse.statusCode {
         case 200:
-            let presenceResponse = try JSONDecoder().decode(GraphPresenceResponse.self, from: data)
-            let statusInfo = TeamsStatusInfo(
-                presence: presenceResponse.teamsPresence,
-                activity: presenceResponse.activity,
-                lastActiveTime: Date(),
-                statusMessage: presenceResponse.statusMessage?.message?.content
-            )
-            statusSubject.send(statusInfo)
+            do {
+                let presenceResponse = try JSONDecoder().decode(GraphPresenceResponse.self, from: data)
+                let statusInfo = TeamsStatusInfo(
+                    presence: presenceResponse.teamsPresence,
+                    activity: presenceResponse.activity,
+                    lastActiveTime: Date(),
+                    statusMessage: presenceResponse.statusMessage?.message?.content
+                )
+                
+                print("✅ MicrosoftGraphService: Successfully parsed Teams presence data")
+                print("👤 MicrosoftGraphService: Teams status - \(presenceResponse.teamsPresence.displayName) (\(presenceResponse.activity))")
+                if let statusMessage = statusInfo.statusMessage {
+                    print("💬 MicrosoftGraphService: Status message: \(statusMessage)")
+                }
+                
+                statusSubject.send(statusInfo)
+                print("✅ MicrosoftGraphService: Teams status updated successfully - \(presenceResponse.teamsPresence.displayName) (\(presenceResponse.activity))")
+                
+            } catch {
+                print("❌ MicrosoftGraphService: Failed to decode presence response: \(error.localizedDescription)")
+                throw MicrosoftGraphError.invalidResponse
+            }
             
         case 401:
+            print("🔐 MicrosoftGraphService: Authentication expired (401), attempting token refresh...")
             try await refreshTokenIfNeeded()
+            print("❌ MicrosoftGraphService: Authentication expired, client needs to retry")
             throw MicrosoftGraphError.authenticationExpired
             
         case 429:
+            print("⚠️ MicrosoftGraphService: Rate limit exceeded (429) - backing off")
             throw MicrosoftGraphError.rateLimitExceeded
             
         default:
+            print("❌ MicrosoftGraphService: Unexpected HTTP status code: \(httpResponse.statusCode)")
+            if let responseString = String(data: data, encoding: .utf8) {
+                print("📄 MicrosoftGraphService: Response body: \(responseString)")
+            }
             throw MicrosoftGraphError.invalidResponse
         }
     }
