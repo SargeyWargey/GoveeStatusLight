@@ -21,6 +21,7 @@ struct SettingsView: View {
     @State private var settingsWindow: NSWindow?
     @State private var windowDelegate: SettingsWindowDelegate?
     @State private var tempPollingInterval: String = ""
+    @State private var updateTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     
     
     private var statusOverview: some View {
@@ -196,12 +197,8 @@ struct SettingsView: View {
                                 )
                             
                             VStack(alignment: .leading, spacing: 2) {
-                                HStack {
-                                    Image(systemName: teamsStatus.presence.systemImageName)
-                                        .foregroundColor(colorForStatus(teamsStatus.presence))
-                                    Text(teamsStatus.presence.displayName)
-                                        .fontWeight(.medium)
-                                }
+                                Text(teamsStatus.presence.displayName)
+                                    .fontWeight(.medium)
                                 
                                 if let activity = teamsStatus.activity, !activity.isEmpty {
                                     Text(activity)
@@ -210,29 +207,13 @@ struct SettingsView: View {
                                 }
                                 
                                 if let lastUpdate = viewModel.lastStatusChange {
-                                    Text("Updated \(timeAgoFormatter.string(for: lastUpdate) ?? "")")
+                                    Text("Updated \(timeAgoFormatter.string(for: lastUpdate) ?? "now")")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 }
                             }
                             
                             Spacer()
-                            
-                            // Show this matches your lights
-                            if !viewModel.selectedDevices.isEmpty {
-                                VStack(alignment: .trailing, spacing: 2) {
-                                    Text("Light Color")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                    Circle()
-                                        .fill(colorForStatus(teamsStatus.presence))
-                                        .frame(width: 16, height: 16)
-                                        .overlay(
-                                            Circle()
-                                                .stroke(Color.primary.opacity(0.3), lineWidth: 0.5)
-                                        )
-                                }
-                            }
                         }
                         .padding(.vertical, 8)
                         .padding(.horizontal, 12)
@@ -495,6 +476,9 @@ struct SettingsView: View {
         } message: {
             Text("1. Open the Govee Home App\n2. Go to Profile → Settings\n3. Select 'Apply for API Key'\n4. Fill in your information\n5. Check your email for the API key\n\nNote: You can only have one active API key at a time.")
         }
+        .onReceive(updateTimer) { _ in
+            // This triggers view refresh every second to update relative time
+        }
     }
     
     private var statusIndicator: some View {
@@ -723,8 +707,12 @@ struct SettingsView: View {
     }
     
     private func openSettingsWindow() {
-        // Close existing window if it exists
-        settingsWindow?.close()
+        // If window already exists, bring it to focus instead of recreating
+        if let existingWindow = settingsWindow {
+            existingWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
         
         let newWindow = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 550, height: 500),
@@ -756,6 +744,7 @@ struct SettingsView: View {
         
         newWindow.center()
         newWindow.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
         
         // Store the window reference
         settingsWindow = newWindow
@@ -787,6 +776,7 @@ struct SettingsWindowView: View {
     @FocusState private var isAPIKeyFieldFocused: Bool
     @State private var isAuthenticatingTeams = false
     @State private var tempPollingInterval: String = ""
+    @State private var updateTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     
     var body: some View {
         ScrollView {
@@ -826,6 +816,9 @@ struct SettingsWindowView: View {
             Button("OK") { }
         } message: {
             Text("1. Open the Govee Home App\n2. Go to Profile → Settings\n3. Select 'Apply for API Key'\n4. Fill in your information\n5. Check your email for the API key\n\nNote: You can only have one active API key at a time.")
+        }
+        .onReceive(updateTimer) { _ in
+            // This triggers view refresh every second to update relative time
         }
     }
     
@@ -948,12 +941,8 @@ struct SettingsWindowView: View {
                                 )
                             
                             VStack(alignment: .leading, spacing: 2) {
-                                HStack {
-                                    Image(systemName: teamsStatus.presence.systemImageName)
-                                        .foregroundColor(colorForStatus(teamsStatus.presence))
-                                    Text(teamsStatus.presence.displayName)
-                                        .fontWeight(.medium)
-                                }
+                                Text(teamsStatus.presence.displayName)
+                                    .fontWeight(.medium)
                                 
                                 if let activity = teamsStatus.activity, !activity.isEmpty {
                                     Text(activity)
@@ -962,29 +951,13 @@ struct SettingsWindowView: View {
                                 }
                                 
                                 if let lastUpdate = viewModel.lastStatusChange {
-                                    Text("Updated \(timeAgoFormatter.string(for: lastUpdate) ?? "")")
+                                    Text("Updated \(timeAgoFormatter.string(for: lastUpdate) ?? "now")")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 }
                             }
                             
                             Spacer()
-                            
-                            // Show this matches your lights
-                            if !viewModel.selectedDevices.isEmpty {
-                                VStack(alignment: .trailing, spacing: 2) {
-                                    Text("Light Color")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                    Circle()
-                                        .fill(colorForStatus(teamsStatus.presence))
-                                        .frame(width: 16, height: 16)
-                                        .overlay(
-                                            Circle()
-                                                .stroke(Color.primary.opacity(0.3), lineWidth: 0.5)
-                                        )
-                                }
-                            }
                         }
                         .padding(.vertical, 8)
                         .padding(.horizontal, 12)
