@@ -188,6 +188,7 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
         // Clear tokens from keychain
         try KeychainService.delete(forAccount: KeychainService.Accounts.microsoftAccessToken)
         try KeychainService.delete(forAccount: KeychainService.Accounts.microsoftRefreshToken)
+        try KeychainService.delete(forAccount: KeychainService.Accounts.microsoftTokenExpiration)
         
         // Update subjects
         authenticationSubject.send(false)
@@ -303,6 +304,12 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
             if let refreshToken = refreshToken {
                 try KeychainService.store(refreshToken, forAccount: KeychainService.Accounts.microsoftRefreshToken)
             }
+            
+            // Store token expiration date
+            if let expirationDate = tokenExpirationDate {
+                let expirationString = ISO8601DateFormatter().string(from: expirationDate)
+                try KeychainService.store(expirationString, forAccount: KeychainService.Accounts.microsoftTokenExpiration)
+            }
         } catch {
             throw MicrosoftGraphError.keychainError
         }
@@ -312,25 +319,54 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
         do {
             if let accessToken = try KeychainService.retrieve(forAccount: KeychainService.Accounts.microsoftAccessToken) {
                 self.accessToken = accessToken
-                authenticationSubject.send(true)
-                connectionSubject.send(.connected)
-            }
-            
-            if let refreshToken = try KeychainService.retrieve(forAccount: KeychainService.Accounts.microsoftRefreshToken) {
-                self.refreshToken = refreshToken
+                
+                // Load refresh token
+                if let refreshToken = try KeychainService.retrieve(forAccount: KeychainService.Accounts.microsoftRefreshToken) {
+                    self.refreshToken = refreshToken
+                }
+                
+                // Load token expiration date
+                if let expirationString = try KeychainService.retrieve(forAccount: KeychainService.Accounts.microsoftTokenExpiration),
+                   let expirationDate = ISO8601DateFormatter().date(from: expirationString) {
+                    self.tokenExpirationDate = expirationDate
+                }
+                
+                // Check if token is still valid
+                if isTokenValid() {
+                    authenticationSubject.send(true)
+                    connectionSubject.send(.connected)
+                    print("📱 MicrosoftGraphService: Loaded valid stored tokens successfully")
+                } else {
+                    print("📱 MicrosoftGraphService: Stored tokens expired, will refresh on next API call")
+                    authenticationSubject.send(true) // Still authenticated, just needs refresh
+                    connectionSubject.send(.connected)
+                }
+            } else {
+                // No stored tokens, start with mock data for debugging
+                print("📱 MicrosoftGraphService: No stored tokens found, starting mock data for debugging")
+                startMockDataGeneration()
             }
         } catch {
-            print("Failed to load stored tokens: \(error.localizedDescription)")
+            print("❌ MicrosoftGraphService: Failed to load stored tokens: \(error.localizedDescription)")
+            startMockDataGeneration()
         }
     }
     
     // MARK: - API Calls
     func refreshPresence() async throws {
+        print("🔄 MicrosoftGraphService: Starting Teams status polling attempt...")
+        print("📊 MicrosoftGraphService: Checking token validity...")
+        
         if !isTokenValid() {
+            print("🔄 MicrosoftGraphService: Token expired, refreshing...")
             try await refreshTokenIfNeeded()
+            print("✅ MicrosoftGraphService: Token refreshed successfully")
+        } else {
+            print("✅ MicrosoftGraphService: Token is valid, proceeding with API call")
         }
         
         guard let accessToken = accessToken else {
+            print("❌ MicrosoftGraphService: No access token available")
             throw MicrosoftGraphError.notAuthenticated
         }
         
@@ -339,31 +375,61 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
+        print("📡 MicrosoftGraphService: Sending GET request to \(url.absoluteString)")
+        let startTime = Date()
+        
         let (data, response) = try await URLSession.shared.data(for: request)
         
+        let requestDuration = Date().timeIntervalSince(startTime)
+        print("⏱️ MicrosoftGraphService: API request completed in \(String(format: "%.2f", requestDuration))s")
+        
         guard let httpResponse = response as? HTTPURLResponse else {
+            print("❌ MicrosoftGraphService: Invalid HTTP response received")
             throw MicrosoftGraphError.invalidResponse
         }
         
+        print("📨 MicrosoftGraphService: Received HTTP \(httpResponse.statusCode) response")
+        
         switch httpResponse.statusCode {
         case 200:
-            let presenceResponse = try JSONDecoder().decode(GraphPresenceResponse.self, from: data)
-            let statusInfo = TeamsStatusInfo(
-                presence: presenceResponse.teamsPresence,
-                activity: presenceResponse.activity,
-                lastActiveTime: Date(),
-                statusMessage: presenceResponse.statusMessage?.message?.content
-            )
-            statusSubject.send(statusInfo)
+            do {
+                let presenceResponse = try JSONDecoder().decode(GraphPresenceResponse.self, from: data)
+                let statusInfo = TeamsStatusInfo(
+                    presence: presenceResponse.teamsPresence,
+                    activity: presenceResponse.activity,
+                    lastActiveTime: Date(),
+                    statusMessage: presenceResponse.statusMessage?.message?.content
+                )
+                
+                print("✅ MicrosoftGraphService: Successfully parsed Teams presence data")
+                print("👤 MicrosoftGraphService: Teams status - \(presenceResponse.teamsPresence.displayName) (\(presenceResponse.activity))")
+                if let statusMessage = statusInfo.statusMessage {
+                    print("💬 MicrosoftGraphService: Status message: \(statusMessage)")
+                }
+                
+                statusSubject.send(statusInfo)
+                print("✅ MicrosoftGraphService: Teams status updated successfully - \(presenceResponse.teamsPresence.displayName) (\(presenceResponse.activity))")
+                
+            } catch {
+                print("❌ MicrosoftGraphService: Failed to decode presence response: \(error.localizedDescription)")
+                throw MicrosoftGraphError.invalidResponse
+            }
             
         case 401:
+            print("🔐 MicrosoftGraphService: Authentication expired (401), attempting token refresh...")
             try await refreshTokenIfNeeded()
+            print("❌ MicrosoftGraphService: Authentication expired, client needs to retry")
             throw MicrosoftGraphError.authenticationExpired
             
         case 429:
+            print("⚠️ MicrosoftGraphService: Rate limit exceeded (429) - backing off")
             throw MicrosoftGraphError.rateLimitExceeded
             
         default:
+            print("❌ MicrosoftGraphService: Unexpected HTTP status code: \(httpResponse.statusCode)")
+            if let responseString = String(data: data, encoding: .utf8) {
+                print("📄 MicrosoftGraphService: Response body: \(responseString)")
+            }
             throw MicrosoftGraphError.invalidResponse
         }
     }
@@ -432,6 +498,7 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
             self.tokenExpirationDate = nil
             try? KeychainService.delete(forAccount: KeychainService.Accounts.microsoftAccessToken)
             try? KeychainService.delete(forAccount: KeychainService.Accounts.microsoftRefreshToken)
+            try? KeychainService.delete(forAccount: KeychainService.Accounts.microsoftTokenExpiration)
             authenticationSubject.send(false)
             connectionSubject.send(.disconnected)
             throw MicrosoftGraphError.authenticationExpired
@@ -446,6 +513,46 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
         self.tokenExpirationDate = Date().addingTimeInterval(TimeInterval(tokenResponse.expiresIn))
         
         try storeTokensSecurely()
+    }
+    
+    
+    // MARK: - Mock Data for Debugging
+    private func startMockDataGeneration() {
+        authenticationSubject.send(false)
+        connectionSubject.send(.disconnected)
+        
+        // Generate mock Teams status for debugging
+        generateMockTeamsStatus()
+        
+        // Update mock status every 30 seconds to simulate real Teams behavior
+        Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+            self?.generateMockTeamsStatus()
+        }
+    }
+    
+    private func generateMockTeamsStatus() {
+        let mockStatuses: [TeamsPresence] = [.available, .busy, .away, .inAMeeting, .inACall, .doNotDisturb]
+        let randomStatus = mockStatuses.randomElement() ?? .available
+        
+        let activities = [
+            "Working from home",
+            "In focus time",
+            "Available for chat",
+            "In a Teams meeting",
+            "On a phone call",
+            "Presenting",
+            "Away from desk"
+        ]
+        
+        let mockStatus = TeamsStatusInfo(
+            presence: randomStatus,
+            activity: activities.randomElement(),
+            lastActiveTime: Date(),
+            statusMessage: "Mock status for debugging"
+        )
+        
+        print("🧪 MicrosoftGraphService: Generated mock Teams status: \(randomStatus.displayName)")
+        statusSubject.send(mockStatus)
     }
 }
 

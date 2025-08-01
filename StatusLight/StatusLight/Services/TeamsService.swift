@@ -18,6 +18,7 @@ protocol TeamsServiceProtocol {
     func refreshStatus() async throws
     func startMonitoring()
     func stopMonitoring()
+    func updatePollingInterval(_ interval: Double)
 }
 
 enum ConnectionStatus: Equatable {
@@ -57,6 +58,7 @@ class TeamsService: TeamsServiceProtocol, ObservableObject {
     private let microsoftGraphService = MicrosoftGraphService()
     private var cancellables = Set<AnyCancellable>()
     private var monitoringTimer: Timer?
+    private var pollingInterval: Double = 15.0 // Default 15 seconds
     
     var currentStatus: AnyPublisher<TeamsStatusInfo?, Never> {
         microsoftGraphService.currentStatus
@@ -95,30 +97,88 @@ class TeamsService: TeamsServiceProtocol, ObservableObject {
     func startMonitoring() {
         stopMonitoring() // Stop any existing monitoring
         
-        // Poll for status updates every 30 seconds to respect Microsoft Graph rate limits
-        monitoringTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
-            Task {
-                try? await self?.refreshStatus()
+        print("🚀 TeamsService: Starting \(pollingInterval)-second monitoring cycle")
+        
+        // Get initial status and then start the restart cycle
+        Task {
+            do {
+                try await refreshStatus()
+                print("✅ TeamsService: Initial status fetch completed")
+                await startRestartCycle()
+            } catch {
+                print("❌ TeamsService: Initial status fetch failed: \(error.localizedDescription)")
+                await startRestartCycle() // Still start the cycle even if initial fetch fails
             }
         }
+    }
+    
+    private func startRestartCycle() async {
+        print("🔄 TeamsService: Starting \(pollingInterval)-second restart cycle")
         
-        // Get initial status
-        Task {
-            try? await refreshStatus()
+        // Create a timer that restarts the entire monitoring process at the specified interval
+        await MainActor.run {
+            monitoringTimer = Timer.scheduledTimer(withTimeInterval: pollingInterval, repeats: true) { [weak self] timer in
+                guard let strongSelf = self else { return }
+                print("🔄 TeamsService: \(strongSelf.pollingInterval)-second restart cycle triggered (valid: \(timer.isValid))")
+                print("🚀 TeamsService: Restarting Teams monitoring cycle...")
+                
+                Task { @MainActor [weak self] in
+                    do {
+                        // Stop current monitoring (but don't invalidate the restart timer)
+                        print("🔄 TeamsService: Refreshing Teams status...")
+                        
+                        // Fetch fresh status
+                        try await self?.refreshStatus()
+                        print("✅ TeamsService: Restart cycle status fetch completed")
+                        
+                    } catch {
+                        print("❌ TeamsService: Restart cycle failed: \(error.localizedDescription)")
+                    }
+                }
+            }
+            
+            // Ensure timer runs on main run loop with common modes to prevent pausing
+            RunLoop.main.add(monitoringTimer!, forMode: .common)
+            print("✅ TeamsService: \(pollingInterval)-second restart cycle timer started")
         }
     }
     
     func stopMonitoring() {
-        monitoringTimer?.invalidate()
-        monitoringTimer = nil
+        if monitoringTimer != nil {
+            print("🛑 TeamsService: Stopping \(pollingInterval)-second polling timer")
+            monitoringTimer?.invalidate()
+            monitoringTimer = nil
+            print("✅ TeamsService: Timer stopped successfully")
+        } else {
+            print("ℹ️ TeamsService: No timer to stop")
+        }
+    }
+    
+    func updatePollingInterval(_ interval: Double) {
+        let clampedInterval = max(1.0, min(3600.0, interval)) // Between 1 second and 1 hour
+        let wasMonitoring = monitoringTimer != nil
+        
+        print("🔄 TeamsService: Updating polling interval from \(pollingInterval)s to \(clampedInterval)s")
+        pollingInterval = clampedInterval
+        
+        // Restart monitoring with new interval if it was already running
+        if wasMonitoring {
+            stopMonitoring()
+            startMonitoring()
+        }
     }
     
     private func setupAuthentication() {
         // Check if we have stored tokens and start monitoring if authenticated
         microsoftGraphService.isAuthenticated
             .sink { [weak self] isAuthenticated in
+                print("🔑 TeamsService: Authentication status changed to: \(isAuthenticated)")
                 if isAuthenticated {
+                    print("🚀 TeamsService: User is authenticated, starting monitoring...")
                     self?.startMonitoring()
+                } else {
+                    print("🛑 TeamsService: User not authenticated, stopping monitoring")
+                    self?.stopMonitoring()
                 }
             }
             .store(in: &cancellables)

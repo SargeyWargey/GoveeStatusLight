@@ -427,6 +427,7 @@ class GoveeService: GoveeServiceProtocol, ObservableObject {
     }
     
     func controlDevice(_ device: GoveeDevice, color: GoveeColorValue) async throws {
+        print("🎨 GoveeService: Controlling device \(device.deviceName) - setting color RGB(\(color.r),\(color.g),\(color.b)) -> Integer \(color.rgbInteger)")
         try await sendControlCommand(
             device: device,
             capability: GoveeCapability(
@@ -435,6 +436,7 @@ class GoveeService: GoveeServiceProtocol, ObservableObject {
                 value: .color(color)
             )
         )
+        print("✅ GoveeService: Successfully sent color command to \(device.deviceName)")
     }
     
     func controlDevice(_ device: GoveeDevice, brightness: Int) async throws {
@@ -462,9 +464,11 @@ class GoveeService: GoveeServiceProtocol, ObservableObject {
     
     private func sendControlCommand(device: GoveeDevice, capability: GoveeCapability) async throws {
         guard let apiKey = apiKey else {
+            print("❌ GoveeService: No API key available for device control")
             throw GoveeServiceError.notAuthenticated
         }
         
+        print("⏳ GoveeService: Waiting for rate limiter...")
         await rateLimiter.waitIfNeeded()
         
         let controlRequest = GoveeControlRequest(
@@ -476,30 +480,45 @@ class GoveeService: GoveeServiceProtocol, ObservableObject {
             )
         )
         
+        print("📤 GoveeService: Sending control command to \(device.deviceName) (SKU: \(device.sku), ID: \(device.id))")
+        print("📤 GoveeService: Capability: \(capability.type) - \(capability.instance)")
+        
         var request = URLRequest(url: URL(string: "\(baseURL)/router/api/v1/device/control")!)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "Govee-API-Key")
         request.httpBody = try JSONEncoder().encode(controlRequest)
         
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse else {
+            print("❌ GoveeService: Invalid response type")
             throw GoveeServiceError.invalidResponse
+        }
+        
+        print("📡 GoveeService: Received response with status code: \(httpResponse.statusCode)")
+        
+        // Print response body for debugging
+        if let responseString = String(data: data, encoding: .utf8) {
+            print("📄 GoveeService: Response body: \(responseString)")
         }
         
         switch httpResponse.statusCode {
         case 200:
+            print("✅ GoveeService: Successfully controlled device \(device.deviceName)")
             // Success - update device status locally
             updateDeviceStatus(device.id, isConnected: true)
             
         case 429:
+            print("⏰ GoveeService: Rate limit exceeded")
             throw GoveeServiceError.rateLimitExceeded
             
         case 404:
+            print("❌ GoveeService: Device not found")
             throw GoveeServiceError.deviceNotFound
             
         default:
+            print("❌ GoveeService: Control failed with status: \(httpResponse.statusCode)")
             throw GoveeServiceError.controlFailed
         }
     }

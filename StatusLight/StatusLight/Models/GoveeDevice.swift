@@ -16,6 +16,7 @@ struct GoveeDevice: Identifiable, Codable {
     let capabilities: [DeviceCapability]
     var isConnected: Bool = false
     var lastUpdated: Date = Date()
+    var isActive: Bool = true // Tracks if device should be controlled (on/off state)
     
     enum CodingKeys: String, CodingKey {
         case id = "device"
@@ -23,6 +24,7 @@ struct GoveeDevice: Identifiable, Codable {
         case deviceName
         case deviceType = "type"
         case capabilities
+        case isActive
     }
     
     init(from decoder: Decoder) throws {
@@ -41,6 +43,7 @@ struct GoveeDevice: Identifiable, Codable {
         self.deviceName = try container.decode(String.self, forKey: .deviceName)
         self.deviceType = try? container.decode(String.self, forKey: .deviceType) // Make optional for group devices
         self.capabilities = try container.decode([DeviceCapability].self, forKey: .capabilities)
+        self.isActive = try container.decodeIfPresent(Bool.self, forKey: .isActive) ?? true
         self.isConnected = false
         self.lastUpdated = Date()
     }
@@ -152,6 +155,11 @@ struct GoveeColorValue: Codable, Equatable {
         Color(red: Double(r) / 255.0, green: Double(g) / 255.0, blue: Double(b) / 255.0)
     }
     
+    /// Convert RGB values to a single integer for Govee API (RGB to 24-bit integer)
+    var rgbInteger: Int {
+        return (r << 16) | (g << 8) | b
+    }
+    
     static func == (lhs: GoveeColorValue, rhs: GoveeColorValue) -> Bool {
         return lhs.r == rhs.r && lhs.g == rhs.g && lhs.b == rhs.b
     }
@@ -201,7 +209,7 @@ enum GoveeCapabilityValue: Codable {
         case .integer(let value):
             try container.encode(value)
         case .color(let value):
-            try container.encode(value)
+            try container.encode(value.rgbInteger)
         case .boolean(let value):
             try container.encode(value)
         case .string(let value):
