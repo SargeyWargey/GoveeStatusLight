@@ -1,179 +1,12 @@
 //
-//  ContentView.swift
+//  SettingsView.swift
 //  StatusLight
 //
-//  Created by Joshua Sargent on 7/30/25.
+//  Created by Joshua Sargent on 7/31/25.
 //
 
 import SwiftUI
 
-struct ContentView: View {
-    @EnvironmentObject var viewModel: StatusLightViewModel
-    @State private var showingDebugger = false
-    @StateObject private var windowManager = WindowManager()
-    
-    var body: some View {
-        VStack(spacing: 16) {
-            // Header
-            HStack {
-                Image(systemName: "lightbulb.fill")
-                    .foregroundColor(.accentColor)
-                Text("StatusLight")
-                    .font(.headline)
-                Spacer()
-                Button("Settings") {
-                    windowManager.openSettingsWindow(with: viewModel)
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            
-            Divider()
-            
-            // Status Section
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Current Status")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                    Spacer()
-                    connectionStatusIndicator
-                }
-                
-                if let teamsStatus = viewModel.currentTeamsStatus {
-                    HStack {
-                        Image(systemName: teamsStatus.presence.systemImageName)
-                            .foregroundColor(colorForStatus(teamsStatus.presence))
-                        Text(teamsStatus.presence.displayName)
-                        Spacer()
-                        if let lastUpdate = viewModel.lastStatusChange {
-                            Text(timeAgoFormatter.string(for: lastUpdate) ?? "")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                } else {
-                    Text("No status available")
-                        .foregroundColor(.secondary)
-                }
-            }
-            
-            Divider()
-            
-            // Upcoming Meeting Section
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Upcoming Meetings")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                
-                if let meeting = viewModel.upcomingMeeting {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(meeting.subject)
-                            .fontWeight(.medium)
-                        Text("in \(meeting.minutesUntilStart) minutes")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                    }
-                } else {
-                    Text("No upcoming meetings")
-                        .foregroundColor(.secondary)
-                }
-            }
-            
-            Divider()
-            
-            // Device Status Section
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Connected Devices")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                
-                if viewModel.selectedDevices.isEmpty {
-                    Text("No devices configured")
-                        .foregroundColor(.secondary)
-                } else {
-                    ForEach(viewModel.selectedDevices) { device in
-                        HStack {
-                            Circle()
-                                .fill(device.isConnected ? .green : .red)
-                                .frame(width: 8, height: 8)
-                            Text(device.deviceName)
-                                .font(.caption)
-                            Spacer()
-                        }
-                    }
-                }
-            }
-            
-            Spacer()
-            
-            // Quick Actions
-            HStack {
-                Button("Refresh") {
-                    Task {
-                        await viewModel.refreshStatus()
-                    }
-                }
-                .buttonStyle(.bordered)
-                
-                Spacer()
-                
-                Button("Quit") {
-                    NSApplication.shared.terminate(nil)
-                }
-                .buttonStyle(.bordered)
-            }
-            
-            // Error Display
-            if let errorMessage = viewModel.errorMessage {
-                Text(errorMessage)
-                    .foregroundColor(.red)
-                    .font(.caption)
-                    .padding(.top, 8)
-                    .onAppear {
-                        // Auto-dismiss error after 5 seconds
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                            viewModel.errorMessage = nil
-                        }
-                    }
-            }
-        }
-        .padding()
-        .frame(width: 300, height: 400)
-        .task {
-            // Initial setup
-            await viewModel.refreshStatus()
-        }
-    }
-    
-    private var connectionStatusIndicator: some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(viewModel.isTeamsConnected ? .green : .red)
-                .frame(width: 8, height: 8)
-            Text("Teams")
-                .font(.caption2)
-            
-            Circle()
-                .fill(viewModel.isGoveeConnected ? .green : .red)
-                .frame(width: 8, height: 8)
-            Text("Govee")
-                .font(.caption2)
-        }
-    }
-    
-    private func colorForStatus(_ status: TeamsPresence) -> Color {
-        let goveeColor = viewModel.colorMapping.colorForTeamsStatus(status)
-        return goveeColor.color
-    }
-    
-    private var timeAgoFormatter: RelativeDateTimeFormatter {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter
-    }
-}
-
-// MARK: - Settings View
 struct SettingsView: View {
     @ObservedObject var viewModel: StatusLightViewModel
     @State private var goveeAPIKey: String = ""
@@ -185,9 +18,102 @@ struct SettingsView: View {
     @State private var isAuthenticatingTeams = false
     
     private var settingsHeader: some View {
-        Text("Settings")
-            .font(.title)
-            .padding(.bottom, 10)
+        HStack {
+            Image(systemName: "lightbulb.fill")
+                .foregroundColor(.accentColor)
+                .font(.title2)
+            Text("StatusLight Settings")
+                .font(.title)
+                .fontWeight(.medium)
+            Spacer()
+            
+            // Quick Actions
+            HStack(spacing: 8) {
+                Button("Refresh") {
+                    Task {
+                        await viewModel.refreshGoveeDevices()
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                
+                Button("Quit") {
+                    NSApplication.shared.terminate(nil)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(.bottom, 10)
+    }
+    
+    private var statusOverview: some View {
+        GroupBox("Status Overview") {
+            HStack(spacing: 20) {
+                // Teams Status
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Circle()
+                            .fill(viewModel.isTeamsConnected ? .green : .red)
+                            .frame(width: 8, height: 8)
+                        Text("Teams")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                    }
+                    
+                    if let teamsStatus = viewModel.currentTeamsStatus {
+                        HStack {
+                            Image(systemName: teamsStatus.presence.systemImageName)
+                                .foregroundColor(colorForStatus(teamsStatus.presence))
+                                .font(.caption)
+                            Text(teamsStatus.presence.displayName)
+                                .font(.caption)
+                        }
+                    } else {
+                        Text("No status")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                Divider()
+                
+                // Govee Status
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Circle()
+                            .fill(viewModel.isGoveeConnected ? .green : .red)
+                            .frame(width: 8, height: 8)
+                        Text("Govee")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                    }
+                    
+                    Text(viewModel.selectedDevices.isEmpty ? "No devices" : "\(viewModel.selectedDevices.count) devices")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                // Current Light Color Preview
+                if let currentColor = viewModel.currentLightColor {
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Text("Current Light")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Circle()
+                            .fill(Color(red: Double(currentColor.r)/255, green: Double(currentColor.g)/255, blue: Double(currentColor.b)/255))
+                            .frame(width: 24, height: 24)
+                            .overlay(
+                                Circle()
+                                    .stroke(Color.primary.opacity(0.2), lineWidth: 1)
+                            )
+                    }
+                }
+            }
+            .padding()
+        }
     }
     
     private var goveeConfigurationSection: some View {
@@ -542,11 +468,13 @@ struct SettingsView: View {
     }
     
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             settingsHeader
             
+            statusOverview
+            
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 16) {
                     goveeConfigurationSection
                     teamsIntegrationSection
                     devicesSection
@@ -554,13 +482,29 @@ struct SettingsView: View {
                 .padding(.horizontal)
             }
             
-            Spacer()
+            // Error Display
+            if let errorMessage = viewModel.errorMessage {
+                Text(errorMessage)
+                    .foregroundColor(.red)
+                    .font(.caption)
+                    .padding(.top, 8)
+                    .onAppear {
+                        // Auto-dismiss error after 5 seconds
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                            viewModel.errorMessage = nil
+                        }
+                    }
+            }
         }
         .padding()
+        .task {
+            // Initial setup when settings view appears
+            await viewModel.refreshGoveeDevices()
+        }
         .alert("How to Get Your Govee API Key", isPresented: $showingAPIKeyInfo) {
             Button("OK") { }
         } message: {
-            Text("1. Open the Govee Home App\\n2. Go to Profile → Settings\\n3. Select 'Apply for API Key'\\n4. Fill in your information\\n5. Check your email for the API key\\n\\nNote: You can only have one active API key at a time.")
+            Text("1. Open the Govee Home App\n2. Go to Profile → Settings\n3. Select 'Apply for API Key'\n4. Fill in your information\n5. Check your email for the API key\n\nNote: You can only have one active API key at a time.")
         }
     }
     
@@ -597,7 +541,7 @@ struct SettingsView: View {
                 
             } catch {
                 await MainActor.run {
-                    configurationMessage = "Failed to configure API Key: \\(error.localizedDescription)"
+                    configurationMessage = "Failed to configure API Key: \(error.localizedDescription)"
                     showingSuccess = false
                     isConfiguring = false
                 }
@@ -640,7 +584,7 @@ struct SettingsView: View {
                 
             } catch {
                 await MainActor.run {
-                    configurationMessage = "Failed to remove API Key: \\(error.localizedDescription)"
+                    configurationMessage = "Failed to remove API Key: \(error.localizedDescription)"
                     showingSuccess = false
                 }
                 
@@ -689,8 +633,7 @@ struct SettingsView: View {
     }
 }
 
-
 #Preview {
-    ContentView()
-        .environmentObject(StatusLightViewModel())
+    SettingsView(viewModel: StatusLightViewModel())
+        .frame(width: 500, height: 600)
 }

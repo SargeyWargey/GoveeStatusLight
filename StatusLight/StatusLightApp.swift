@@ -12,10 +12,10 @@ struct StatusLightApp: App {
     @StateObject private var sharedViewModel = StatusLightViewModel()
     
     var body: some Scene {
-        // StatusLight MenuBarExtra - primary interface
+        // StatusLight MenuBarExtra - settings interface
         MenuBarExtra("StatusLight", systemImage: "lightbulb.fill") {
-            ContentView()
-                .environmentObject(sharedViewModel)
+            SettingsView(viewModel: sharedViewModel)
+                .frame(width: 500, height: 600)
         }
         .menuBarExtraStyle(.window)
     }
