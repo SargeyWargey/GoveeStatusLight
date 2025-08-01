@@ -32,6 +32,8 @@ class StatusLightViewModel: ObservableObject {
     // MARK: - Private Properties
     private var cancellables = Set<AnyCancellable>()
     private var lightingTimer: Timer?
+    private var storedSelectedDeviceIds: [String]?
+    private var storedDeviceStates: [String: Bool]?
     
     // MARK: - Initialization
     init(
@@ -49,6 +51,7 @@ class StatusLightViewModel: ObservableObject {
         // Initialize services
         Task {
             await goveeService.loadStoredAPIKey()
+            await loadDeviceStates()
         }
     }
     
@@ -184,11 +187,13 @@ class StatusLightViewModel: ObservableObject {
     func addDevice(_ device: GoveeDevice) {
         if !selectedDevices.contains(where: { $0.id == device.id }) {
             selectedDevices.append(device)
+            saveSelectedDevices()
         }
     }
     
     func removeDevice(_ device: GoveeDevice) {
         selectedDevices.removeAll { $0.id == device.id }
+        saveSelectedDevices()
     }
     
     func toggleDeviceSelection(_ device: GoveeDevice) {
@@ -197,6 +202,28 @@ class StatusLightViewModel: ObservableObject {
         } else {
             addDevice(device)
         }
+        saveSelectedDevices()
+    }
+    
+    func toggleDeviceActive(_ device: GoveeDevice) async {
+        guard let index = selectedDevices.firstIndex(where: { $0.id == device.id }) else { return }
+        
+        selectedDevices[index].isActive.toggle()
+        let newState = selectedDevices[index].isActive
+        
+        // Send power command to device
+        do {
+            try await goveeService.controlDevice(device, power: newState)
+            print("✅ StatusLightViewModel: Device \(device.deviceName) power set to \(newState)")
+        } catch {
+            await MainActor.run {
+                self.errorMessage = "Failed to toggle \(device.deviceName): \(error.localizedDescription)"
+            }
+            // Revert the state change on failure
+            selectedDevices[index].isActive.toggle()
+        }
+        
+        saveDeviceStates()
     }
     
     func isDeviceSelected(_ device: GoveeDevice) -> Bool {
@@ -278,8 +305,11 @@ class StatusLightViewModel: ObservableObject {
                 // Update available devices list
                 self?.availableDevices = devices
                 
-                // Auto-select RGBICWW devices if none are selected
-                if self?.selectedDevices.isEmpty == true {
+                // Try to restore previously selected devices first
+                if let storedIds = self?.storedSelectedDeviceIds, !storedIds.isEmpty {
+                    self?.restoreDeviceSelection(from: devices)
+                } else if self?.selectedDevices.isEmpty == true && self?.hasStoredDeviceSelection() == false {
+                    // Only auto-select devices if no stored selection and none currently selected
                     let colorDevices = devices.filter { device in
                         device.capabilities.contains { capability in
                             capability.type.contains("color_setting")
@@ -287,6 +317,7 @@ class StatusLightViewModel: ObservableObject {
                     }
                     print("🎨 StatusLightViewModel: Auto-selecting \(colorDevices.count) color-capable devices")
                     self?.selectedDevices = colorDevices
+                    self?.saveSelectedDevices()
                 }
             }
             .store(in: &cancellables)
@@ -325,11 +356,14 @@ class StatusLightViewModel: ObservableObject {
         if currentLightColor != targetColor {
             currentLightColor = targetColor
             
-            print("🎨 StatusLightViewModel: Color changed! Sending commands to \(selectedDevices.count) devices...")
+            print("🎨 StatusLightViewModel: Color changed! Sending commands to active devices...")
             print("🎨 TERMINAL COLOR LOG: Lights changing from RGB(\(currentLightColor?.r ?? 0),\(currentLightColor?.g ?? 0),\(currentLightColor?.b ?? 0)) to RGB(\(targetColor.r),\(targetColor.g),\(targetColor.b))")
             
-            // Update all selected devices
-            for device in selectedDevices {
+            // Update only active selected devices
+            let activeDevices = selectedDevices.filter { $0.isActive }
+            print("💡 StatusLightViewModel: Updating \(activeDevices.count) active devices out of \(selectedDevices.count) selected")
+            
+            for device in activeDevices {
                 do {
                     print("📡 StatusLightViewModel: Sending color RGB(\(targetColor.r),\(targetColor.g),\(targetColor.b)) to \(device.deviceName)")
                     try await goveeService.controlDevice(device, color: targetColor)
@@ -423,6 +457,98 @@ class StatusLightViewModel: ObservableObject {
                 self.isRefreshingDevices = false
             }
         }
+    }
+    
+    // MARK: - Device State Persistence
+    private func saveSelectedDevices() {
+        do {
+            let deviceIds = selectedDevices.map { $0.id }
+            let data = try JSONEncoder().encode(deviceIds)
+            if let jsonString = String(data: data, encoding: .utf8) {
+                try KeychainService.store(jsonString, forAccount: KeychainService.Accounts.selectedDevices)
+                print("💾 StatusLightViewModel: Saved \(deviceIds.count) selected device IDs")
+            }
+        } catch {
+            print("❌ StatusLightViewModel: Failed to save selected devices: \(error.localizedDescription)")
+        }
+    }
+    
+    private func saveDeviceStates() {
+        do {
+            let deviceStates = selectedDevices.reduce(into: [String: Bool]()) { result, device in
+                result[device.id] = device.isActive
+            }
+            let data = try JSONEncoder().encode(deviceStates)
+            if let jsonString = String(data: data, encoding: .utf8) {
+                try KeychainService.store(jsonString, forAccount: KeychainService.Accounts.deviceStates)
+                print("💾 StatusLightViewModel: Saved device states for \(deviceStates.count) devices")
+            }
+        } catch {
+            print("❌ StatusLightViewModel: Failed to save device states: \(error.localizedDescription)")
+        }
+    }
+    
+    private func loadDeviceStates() async {
+        do {
+            if let savedSelection = try KeychainService.retrieve(forAccount: KeychainService.Accounts.selectedDevices),
+               let data = savedSelection.data(using: .utf8) {
+                let deviceIds = try JSONDecoder().decode([String].self, from: data)
+                print("📱 StatusLightViewModel: Loaded \(deviceIds.count) selected device IDs from storage")
+                
+                // Store the IDs to use when devices become available
+                await MainActor.run {
+                    self.storedSelectedDeviceIds = deviceIds
+                }
+            }
+            
+            if let savedStates = try KeychainService.retrieve(forAccount: KeychainService.Accounts.deviceStates),
+               let data = savedStates.data(using: .utf8) {
+                let deviceStates = try JSONDecoder().decode([String: Bool].self, from: data)
+                print("📱 StatusLightViewModel: Loaded device states for \(deviceStates.count) devices")
+                
+                await MainActor.run {
+                    self.storedDeviceStates = deviceStates
+                }
+            }
+        } catch {
+            print("❌ StatusLightViewModel: Failed to load device states: \(error.localizedDescription)")
+        }
+    }
+    
+    private func hasStoredDeviceSelection() -> Bool {
+        do {
+            return try KeychainService.retrieve(forAccount: KeychainService.Accounts.selectedDevices) != nil
+        } catch {
+            return false
+        }
+    }
+    
+    private func restoreDeviceSelection(from devices: [GoveeDevice]) {
+        guard let storedIds = storedSelectedDeviceIds else { return }
+        
+        var restored: [GoveeDevice] = []
+        for deviceId in storedIds {
+            if let device = devices.first(where: { $0.id == deviceId }) {
+                var deviceWithState = device
+                // Restore the active state if we have it stored
+                if let storedStates = storedDeviceStates {
+                    deviceWithState.isActive = storedStates[deviceId] ?? true
+                }
+                restored.append(deviceWithState)
+            }
+        }
+        
+        if !restored.isEmpty {
+            selectedDevices = restored
+            print("🔄 StatusLightViewModel: Restored \(restored.count) selected devices with their states")
+            for device in restored {
+                print("  - \(device.deviceName): active=\(device.isActive)")
+            }
+        }
+        
+        // Clear the temporary storage
+        storedSelectedDeviceIds = nil
+        storedDeviceStates = nil
     }
 }
 

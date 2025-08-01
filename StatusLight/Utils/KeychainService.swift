@@ -132,5 +132,8 @@ extension KeychainService {
         static let goveeAPIKey = "govee_api_key"
         static let microsoftAccessToken = "microsoft_access_token"
         static let microsoftRefreshToken = "microsoft_refresh_token"
+        static let microsoftTokenExpiration = "microsoft_token_expiration"
+        static let selectedDevices = "selected_devices"
+        static let deviceStates = "device_states"
     }
 }

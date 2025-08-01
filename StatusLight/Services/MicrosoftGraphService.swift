@@ -188,6 +188,7 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
         // Clear tokens from keychain
         try KeychainService.delete(forAccount: KeychainService.Accounts.microsoftAccessToken)
         try KeychainService.delete(forAccount: KeychainService.Accounts.microsoftRefreshToken)
+        try KeychainService.delete(forAccount: KeychainService.Accounts.microsoftTokenExpiration)
         
         // Update subjects
         authenticationSubject.send(false)
@@ -303,6 +304,12 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
             if let refreshToken = refreshToken {
                 try KeychainService.store(refreshToken, forAccount: KeychainService.Accounts.microsoftRefreshToken)
             }
+            
+            // Store token expiration date
+            if let expirationDate = tokenExpirationDate {
+                let expirationString = ISO8601DateFormatter().string(from: expirationDate)
+                try KeychainService.store(expirationString, forAccount: KeychainService.Accounts.microsoftTokenExpiration)
+            }
         } catch {
             throw MicrosoftGraphError.keychainError
         }
@@ -312,12 +319,27 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
         do {
             if let accessToken = try KeychainService.retrieve(forAccount: KeychainService.Accounts.microsoftAccessToken) {
                 self.accessToken = accessToken
-                authenticationSubject.send(true)
-                connectionSubject.send(.connected)
-                print("📱 MicrosoftGraphService: Loaded stored tokens successfully")
                 
+                // Load refresh token
                 if let refreshToken = try KeychainService.retrieve(forAccount: KeychainService.Accounts.microsoftRefreshToken) {
                     self.refreshToken = refreshToken
+                }
+                
+                // Load token expiration date
+                if let expirationString = try KeychainService.retrieve(forAccount: KeychainService.Accounts.microsoftTokenExpiration),
+                   let expirationDate = ISO8601DateFormatter().date(from: expirationString) {
+                    self.tokenExpirationDate = expirationDate
+                }
+                
+                // Check if token is still valid
+                if isTokenValid() {
+                    authenticationSubject.send(true)
+                    connectionSubject.send(.connected)
+                    print("📱 MicrosoftGraphService: Loaded valid stored tokens successfully")
+                } else {
+                    print("📱 MicrosoftGraphService: Stored tokens expired, will refresh on next API call")
+                    authenticationSubject.send(true) // Still authenticated, just needs refresh
+                    connectionSubject.send(.connected)
                 }
             } else {
                 // No stored tokens, start with mock data for debugging
@@ -476,6 +498,7 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
             self.tokenExpirationDate = nil
             try? KeychainService.delete(forAccount: KeychainService.Accounts.microsoftAccessToken)
             try? KeychainService.delete(forAccount: KeychainService.Accounts.microsoftRefreshToken)
+            try? KeychainService.delete(forAccount: KeychainService.Accounts.microsoftTokenExpiration)
             authenticationSubject.send(false)
             connectionSubject.send(.disconnected)
             throw MicrosoftGraphError.authenticationExpired

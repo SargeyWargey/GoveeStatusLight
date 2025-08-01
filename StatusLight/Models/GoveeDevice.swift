@@ -16,6 +16,7 @@ struct GoveeDevice: Identifiable, Codable {
     let capabilities: [DeviceCapability]
     var isConnected: Bool = false
     var lastUpdated: Date = Date()
+    var isActive: Bool = true // Tracks if device should be controlled (on/off state)
     
     enum CodingKeys: String, CodingKey {
         case id = "device"
@@ -23,6 +24,7 @@ struct GoveeDevice: Identifiable, Codable {
         case deviceName
         case deviceType = "type"
         case capabilities
+        case isActive
     }
     
     init(from decoder: Decoder) throws {
@@ -41,6 +43,7 @@ struct GoveeDevice: Identifiable, Codable {
         self.deviceName = try container.decode(String.self, forKey: .deviceName)
         self.deviceType = try? container.decode(String.self, forKey: .deviceType) // Make optional for group devices
         self.capabilities = try container.decode([DeviceCapability].self, forKey: .capabilities)
+        self.isActive = try container.decodeIfPresent(Bool.self, forKey: .isActive) ?? true
         self.isConnected = false
         self.lastUpdated = Date()
     }
