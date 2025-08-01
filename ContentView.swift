@@ -8,9 +8,9 @@
 import SwiftUI
 
 struct ContentView: View {
-    @EnvironmentObject var viewModel: StatusLightViewModel
+    @StateObject private var viewModel = StatusLightViewModel()
+    @State private var showingSettings = false
     @State private var showingDebugger = false
-    @StateObject private var windowManager = WindowManager()
     
     var body: some View {
         VStack(spacing: 16) {
@@ -22,7 +22,7 @@ struct ContentView: View {
                     .font(.headline)
                 Spacer()
                 Button("Settings") {
-                    windowManager.openSettingsWindow(with: viewModel)
+                    showingSettings = true
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -139,6 +139,11 @@ struct ContentView: View {
         }
         .padding()
         .frame(width: 300, height: 400)
+        .sheet(isPresented: $showingSettings) {
+            SettingsView(viewModel: viewModel)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
         .task {
             // Initial setup
             await viewModel.refreshStatus()
@@ -176,6 +181,8 @@ struct ContentView: View {
 // MARK: - Settings View
 struct SettingsView: View {
     @ObservedObject var viewModel: StatusLightViewModel
+    @Environment(\.dismiss) private var dismiss
+    
     @State private var goveeAPIKey: String = ""
     @State private var isConfiguring = false
     @State private var showingAPIKeyInfo = false
@@ -243,12 +250,6 @@ struct SettingsView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(goveeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isConfiguring)
                 
-                Button("Test API Key") {
-                    testGoveeAPIKey()
-                }
-                .buttonStyle(.bordered)
-                .disabled(goveeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isConfiguring)
-                
                 if isConfiguring {
                     ProgressView()
                         .scaleEffect(0.8)
@@ -288,78 +289,6 @@ struct SettingsView: View {
                         Text(viewModel.isTeamsConnected ? "Connected" : "Mock Data")
                             .font(.caption)
                     }
-                }
-                
-                // Teams Status Indicator
-                if let teamsStatus = viewModel.currentTeamsStatus {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Current Presence:")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                        
-                        HStack(spacing: 12) {
-                            // Status indicator light matching the actual device color
-                            Circle()
-                                .fill(colorForStatus(teamsStatus.presence))
-                                .frame(width: 24, height: 24)
-                                .overlay(
-                                    Circle()
-                                        .stroke(Color.primary.opacity(0.2), lineWidth: 1)
-                                )
-                            
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack {
-                                    Image(systemName: teamsStatus.presence.systemImageName)
-                                        .foregroundColor(colorForStatus(teamsStatus.presence))
-                                    Text(teamsStatus.presence.displayName)
-                                        .fontWeight(.medium)
-                                }
-                                
-                                if let activity = teamsStatus.activity, !activity.isEmpty {
-                                    Text(activity)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                
-                                if let lastUpdate = viewModel.lastStatusChange {
-                                    Text("Updated \(timeAgoFormatter.string(for: lastUpdate) ?? "")")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            
-                            Spacer()
-                            
-                            // Show this matches your lights
-                            if !viewModel.selectedDevices.isEmpty {
-                                VStack(alignment: .trailing, spacing: 2) {
-                                    Text("Light Color")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                    Circle()
-                                        .fill(colorForStatus(teamsStatus.presence))
-                                        .frame(width: 16, height: 16)
-                                        .overlay(
-                                            Circle()
-                                                .stroke(Color.primary.opacity(0.3), lineWidth: 0.5)
-                                        )
-                                }
-                            }
-                        }
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 12)
-                        .background(colorForStatus(teamsStatus.presence).opacity(0.1))
-                        .cornerRadius(8)
-                    }
-                } else {
-                    HStack {
-                        Image(systemName: "questionmark.circle")
-                            .foregroundColor(.secondary)
-                        Text("No Teams status available")
-                            .foregroundColor(.secondary)
-                            .font(.subheadline)
-                    }
-                    .padding(.vertical, 8)
                 }
                 
                 if !viewModel.isTeamsConnected {
@@ -434,105 +363,28 @@ struct SettingsView: View {
     }
     
     private var devicesSection: some View {
-        GroupBox("Govee Devices") {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("Available Devices")
-                        .fontWeight(.medium)
-                    Spacer()
-                    if viewModel.isGoveeConnected {
-                        HStack {
-                            Button("Refresh Devices") {
-                                refreshGoveeDevices()
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .disabled(viewModel.isRefreshingDevices)
-                            
-                            if viewModel.isRefreshingDevices {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                                    .controlSize(.small)
-                            }
-                        }
-                    }
-                }
-                
-                if viewModel.availableDevices.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("No devices discovered yet")
-                            .foregroundColor(.secondary)
-                        if viewModel.isGoveeConnected {
-                            Text("Click 'Refresh Devices' to discover your Govee lights")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text("Configure your Govee API key to discover devices")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
+        GroupBox("Connected Devices") {
+            VStack(alignment: .leading, spacing: 8) {
+                if viewModel.selectedDevices.isEmpty {
+                    Text("No devices discovered yet")
+                        .foregroundColor(.secondary)
+                    Text("Configure your Govee API key to discover devices")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 } else {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if !viewModel.selectedDevices.isEmpty {
-                            Text("Selected devices will sync with your Teams status")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .padding(.bottom, 4)
-                        }
-                        
-                        ForEach(viewModel.availableDevices, id: \.id) { device in
-                            HStack {
-                                Button(action: {
-                                    viewModel.toggleDeviceSelection(device)
-                                }) {
-                                    HStack {
-                                        // Selection indicator
-                                        Image(systemName: viewModel.isDeviceSelected(device) ? "checkmark.circle.fill" : "circle")
-                                            .foregroundColor(viewModel.isDeviceSelected(device) ? .blue : .secondary)
-                                        
-                                        // Connection status
-                                        Circle()
-                                            .fill(device.isConnected ? .green : .red)
-                                            .frame(width: 6, height: 6)
-                                        
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(device.deviceName)
-                                                .fontWeight(.medium)
-                                                .foregroundColor(.primary)
-                                            HStack {
-                                                Text(device.sku)
-                                                    .font(.caption)
-                                                    .foregroundColor(.secondary)
-                                                
-                                                // Show if device supports color
-                                                if device.capabilities.contains(where: { $0.type.contains("color_setting") }) {
-                                                    Image(systemName: "paintpalette.fill")
-                                                        .font(.caption2)
-                                                        .foregroundColor(.orange)
-                                                }
-                                            }
-                                        }
-                                        
-                                        Spacer()
-                                        
-                                        if viewModel.isDeviceSelected(device) {
-                                            Text("Teams Sync")
-                                                .font(.caption2)
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 2)
-                                                .background(.blue.opacity(0.2))
-                                                .foregroundColor(.blue)
-                                                .cornerRadius(4)
-                                        }
-                                    }
-                                    .padding(.vertical, 4)
-                                    .padding(.horizontal, 8)
-                                    .background(viewModel.isDeviceSelected(device) ? Color.blue.opacity(0.1) : Color.clear)
-                                    .cornerRadius(8)
-                                }
-                                .buttonStyle(.plain)
+                    ForEach(viewModel.selectedDevices, id: \.id) { device in
+                        HStack {
+                            Circle()
+                                .fill(device.isConnected ? .green : .red)
+                                .frame(width: 8, height: 8)
+                            VStack(alignment: .leading) {
+                                Text(device.deviceName)
+                                    .fontWeight(.medium)
+                                Text(device.sku)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
                             }
+                            Spacer()
                         }
                     }
                 }
@@ -555,8 +407,15 @@ struct SettingsView: View {
             }
             
             Spacer()
+            
+            // Close Button
+            Button("Close") {
+                dismiss()
+            }
+            .buttonStyle(.borderedProminent)
         }
         .padding()
+        .frame(width: 500, height: 600)
         .alert("How to Get Your Govee API Key", isPresented: $showingAPIKeyInfo) {
             Button("OK") { }
         } message: {
@@ -610,20 +469,6 @@ struct SettingsView: View {
         }
     }
     
-    private func testGoveeAPIKey() {
-        isConfiguring = true
-        configurationMessage = ""
-        showingSuccess = false
-        
-        Task {
-            await viewModel.testGoveeAPIKey(goveeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines))
-            
-            await MainActor.run {
-                isConfiguring = false
-            }
-        }
-    }
-    
     private func removeGoveeAPIKey() {
         Task {
             do {
@@ -669,28 +514,8 @@ struct SettingsView: View {
             await viewModel.signOutFromTeams()
         }
     }
-    
-    private func refreshGoveeDevices() {
-        Task {
-            await viewModel.refreshGoveeDevices()
-        }
-    }
-    
-    // MARK: - Helper Functions for SettingsView
-    private func colorForStatus(_ status: TeamsPresence) -> Color {
-        let goveeColor = viewModel.colorMapping.colorForTeamsStatus(status)
-        return goveeColor.color
-    }
-    
-    private var timeAgoFormatter: RelativeDateTimeFormatter {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter
-    }
 }
-
 
 #Preview {
     ContentView()
-        .environmentObject(StatusLightViewModel())
 }

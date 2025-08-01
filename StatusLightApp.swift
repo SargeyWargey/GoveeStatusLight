@@ -9,13 +9,10 @@ import SwiftUI
 
 @main
 struct StatusLightApp: App {
-    @StateObject private var sharedViewModel = StatusLightViewModel()
-    
     var body: some Scene {
         // StatusLight MenuBarExtra - primary interface
         MenuBarExtra("StatusLight", systemImage: "lightbulb.fill") {
             ContentView()
-                .environmentObject(sharedViewModel)
         }
         .menuBarExtraStyle(.window)
     }

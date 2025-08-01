@@ -17,8 +17,6 @@ protocol GoveeServiceProtocol {
     func loadStoredAPIKey() async
     func removeAPIKey() async throws
     func validateAPIKey() async throws -> Bool
-    func testAPIKey() async throws -> Bool
-    func testTemporaryAPIKey(_ testKey: String) async throws -> Bool
     func discoverDevices() async throws
     func controlDevice(_ device: GoveeDevice, color: GoveeColorValue) async throws
     func controlDevice(_ device: GoveeDevice, brightness: Int) async throws
@@ -164,74 +162,6 @@ class GoveeService: GoveeServiceProtocol, ObservableObject {
         }
     }
     
-    /// Test the API key with a simple request
-    func testAPIKey() async throws -> Bool {
-        guard let apiKey = apiKey else {
-            print("❌ GoveeService: No API key available for testing")
-            throw GoveeServiceError.notAuthenticated
-        }
-        
-        return try await testTemporaryAPIKey(apiKey)
-    }
-    
-    /// Test a specific API key without storing it
-    func testTemporaryAPIKey(_ testKey: String) async throws -> Bool {
-        let trimmedKey = testKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedKey.isEmpty else {
-            print("❌ GoveeService: Empty API key provided for testing")
-            throw GoveeServiceError.notAuthenticated
-        }
-        
-        print("🧪 GoveeService: Testing API key...")
-        
-        // Make a simple request to test the API key
-        var request = URLRequest(url: URL(string: "\(baseURL)/router/api/v1/user/devices")!)
-        request.httpMethod = "GET"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(trimmedKey, forHTTPHeaderField: "Govee-API-Key")
-        
-        print("🌐 GoveeService: Testing API request to \(request.url?.absoluteString ?? "unknown")")
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse else {
-            print("❌ GoveeService: Invalid response type during API test")
-            throw GoveeServiceError.invalidResponse
-        }
-        
-        print("📡 GoveeService: Test response status code: \(httpResponse.statusCode)")
-        
-        // Print the raw response for debugging
-        let responseString = String(data: data, encoding: .utf8) ?? "Unable to decode response"
-        print("📄 GoveeService: Test response: \(responseString)")
-        
-        switch httpResponse.statusCode {
-        case 200:
-            print("✅ GoveeService: API key test successful - received 200 OK")
-            return true
-            
-        case 401:
-            print("❌ GoveeService: API key test failed - Unauthorized (401)")
-            return false
-            
-        case 403:
-            print("❌ GoveeService: API key test failed - Forbidden (403)")
-            return false
-            
-        case 404:
-            print("❌ GoveeService: API key test failed - Not Found (404)")
-            return false
-            
-        case 429:
-            print("⏰ GoveeService: API key test failed - Rate Limited (429)")
-            return false
-            
-        default:
-            print("❌ GoveeService: API key test failed - Unexpected status code: \(httpResponse.statusCode)")
-            return false
-        }
-    }
-    
     /// Validate stored key periodically
     private func validateStoredKey() async throws {
         do {
@@ -249,21 +179,7 @@ class GoveeService: GoveeServiceProtocol, ObservableObject {
     
     func discoverDevices() async throws {
         guard let apiKey = apiKey else {
-            print("❌ GoveeService: No API key available")
             throw GoveeServiceError.notAuthenticated
-        }
-        
-        print("🔄 GoveeService: Starting device discovery with API key: \(String(apiKey.prefix(8)))...")
-        
-        // Validate API key format
-        if apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            print("❌ GoveeService: API key is empty")
-            throw GoveeServiceError.invalidAPIKey
-        }
-        
-        if apiKey.count < 10 {
-            print("❌ GoveeService: API key appears to be too short")
-            throw GoveeServiceError.invalidAPIKey
         }
         
         await rateLimiter.waitIfNeeded()
@@ -273,161 +189,32 @@ class GoveeService: GoveeServiceProtocol, ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "Govee-API-Key")
         
-        print("🌐 GoveeService: Making API request to \(request.url?.absoluteString ?? "unknown")")
-        print("🔑 GoveeService: Using API key header: Govee-API-Key")
-        
         let (data, response) = try await URLSession.shared.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse else {
-            print("❌ GoveeService: Invalid response type")
             throw GoveeServiceError.invalidResponse
         }
         
-        print("📡 GoveeService: Received response with status code: \(httpResponse.statusCode)")
-        
         switch httpResponse.statusCode {
         case 200:
-            print("✅ GoveeService: Success response, parsing devices...")
-            let responseString = String(data: data, encoding: .utf8) ?? "Unable to decode response"
-            print("📄 GoveeService: Response data: \(responseString)")
-            
-            do {
-                // Try to decode with different possible response structures
-                if let deviceResponse = try? JSONDecoder().decode(GoveeDeviceResponse.self, from: data) {
-                    // Standard Govee API response structure with code, message, and data
-                    let discoveredDevices = deviceResponse.data
-                    print("🔍 GoveeService: Found \(discoveredDevices.count) devices (standard structure)")
-                    
-                    for device in discoveredDevices {
-                        print("  - Device: \(device.deviceName) (\(device.sku)) - ID: \(device.id)")
-                    }
-                    
-                    let updatedDevices = discoveredDevices.map { device in
-                        var updatedDevice = device
-                        updatedDevice.isConnected = true
-                        updatedDevice.lastUpdated = Date()
-                        return updatedDevice
-                    }
-                    
-                    devicesSubject.send(updatedDevices)
-                    print("✅ GoveeService: Device discovery completed, \(updatedDevices.count) devices available")
-                    
-                } else if let directDeviceResponse = try? JSONDecoder().decode(GoveeDirectDeviceResponse.self, from: data) {
-                    // Alternative structure with nested data field
-                    let discoveredDevices = directDeviceResponse.data
-                    print("🔍 GoveeService: Found \(discoveredDevices.count) devices (nested data structure)")
-                    
-                    for device in discoveredDevices {
-                        print("  - Device: \(device.deviceName) (\(device.sku)) - ID: \(device.id)")
-                    }
-                    
-                    let updatedDevices = discoveredDevices.map { device in
-                        var updatedDevice = device
-                        updatedDevice.isConnected = true
-                        updatedDevice.lastUpdated = Date()
-                        return updatedDevice
-                    }
-                    
-                    devicesSubject.send(updatedDevices)
-                    print("✅ GoveeService: Device discovery completed, \(updatedDevices.count) devices available")
-                    
-                } else if let simpleResponse = try? JSONDecoder().decode(GoveeSimpleResponse.self, from: data) {
-                    // Simple structure with direct devices array
-                    let discoveredDevices = simpleResponse.devices
-                    print("🔍 GoveeService: Found \(discoveredDevices.count) devices (simple structure)")
-                    
-                    for device in discoveredDevices {
-                        print("  - Device: \(device.deviceName) (\(device.sku)) - ID: \(device.id)")
-                    }
-                    
-                    let updatedDevices = discoveredDevices.map { device in
-                        var updatedDevice = device
-                        updatedDevice.isConnected = true
-                        updatedDevice.lastUpdated = Date()
-                        return updatedDevice
-                    }
-                    
-                    devicesSubject.send(updatedDevices)
-                    print("✅ GoveeService: Device discovery completed, \(updatedDevices.count) devices available")
-                    
-                } else if let devices = try? JSONDecoder().decode([GoveeDevice].self, from: data) {
-                    // Direct array of devices
-                    print("🔍 GoveeService: Found \(devices.count) devices (direct array)")
-                    
-                    for device in devices {
-                        print("  - Device: \(device.deviceName) (\(device.sku)) - ID: \(device.id)")
-                    }
-                    
-                    let updatedDevices = devices.map { device in
-                        var updatedDevice = device
-                        updatedDevice.isConnected = true
-                        updatedDevice.lastUpdated = Date()
-                        return updatedDevice
-                    }
-                    
-                    devicesSubject.send(updatedDevices)
-                    print("✅ GoveeService: Device discovery completed, \(updatedDevices.count) devices available")
-                    
-                } else {
-                    print("❌ GoveeService: Unable to decode response with any known structure")
-                    
-                    // Try to parse as generic JSON to understand the structure
-                    if let json = try? JSONSerialization.jsonObject(with: data, options: []) {
-                        print("📄 GoveeService: Raw JSON structure: \(json)")
-                    }
-                    
-                    // Print the raw response for debugging
-                    let responseString = String(data: data, encoding: .utf8) ?? "Unable to decode response"
-                    print("📄 GoveeService: Full response: \(responseString)")
-                    
-                    throw GoveeServiceError.invalidResponse
-                }
-                
-            } catch {
-                print("❌ GoveeService: Failed to decode response: \(error)")
-                throw GoveeServiceError.invalidResponse
+            let deviceResponse = try JSONDecoder().decode(GoveeDeviceResponse.self, from: data)
+            let updatedDevices = deviceResponse.payload.devices.map { device in
+                var updatedDevice = device
+                updatedDevice.isConnected = true
+                updatedDevice.lastUpdated = Date()
+                return updatedDevice
             }
-            
-        case 401:
-            print("❌ GoveeService: Unauthorized (401) - Invalid API key")
-            let responseString = String(data: data, encoding: .utf8) ?? "Unable to decode response"
-            print("📄 GoveeService: 401 Error response: \(responseString)")
-            throw GoveeServiceError.authenticationFailed
-            
-        case 403:
-            print("❌ GoveeService: Forbidden (403) - API key may be invalid or expired")
-            let responseString = String(data: data, encoding: .utf8) ?? "Unable to decode response"
-            print("📄 GoveeService: 403 Error response: \(responseString)")
-            throw GoveeServiceError.authenticationFailed
-            
-        case 404:
-            print("❌ GoveeService: Not Found (404) - API endpoint may be incorrect")
-            let responseString = String(data: data, encoding: .utf8) ?? "Unable to decode response"
-            print("📄 GoveeService: 404 Error response: \(responseString)")
-            throw GoveeServiceError.deviceNotFound
+            devicesSubject.send(updatedDevices)
             
         case 429:
-            print("⏰ GoveeService: Rate limited (429)")
-            let responseString = String(data: data, encoding: .utf8) ?? "Unable to decode response"
-            print("📄 GoveeService: 429 Error response: \(responseString)")
             throw GoveeServiceError.rateLimitExceeded
             
-        case 500...599:
-            print("❌ GoveeService: Server error (\(httpResponse.statusCode))")
-            let responseString = String(data: data, encoding: .utf8) ?? "Unable to decode response"
-            print("📄 GoveeService: Server error response: \(responseString)")
-            throw GoveeServiceError.networkError
-            
         default:
-            print("❌ GoveeService: Unexpected status code: \(httpResponse.statusCode)")
-            let responseString = String(data: data, encoding: .utf8) ?? "Unable to decode response"
-            print("📄 GoveeService: Error response: \(responseString)")
             throw GoveeServiceError.invalidResponse
         }
     }
     
     func controlDevice(_ device: GoveeDevice, color: GoveeColorValue) async throws {
-        print("🎨 GoveeService: Controlling device \(device.deviceName) - setting color RGB(\(color.r),\(color.g),\(color.b)) -> Integer \(color.rgbInteger)")
         try await sendControlCommand(
             device: device,
             capability: GoveeCapability(
@@ -436,7 +223,6 @@ class GoveeService: GoveeServiceProtocol, ObservableObject {
                 value: .color(color)
             )
         )
-        print("✅ GoveeService: Successfully sent color command to \(device.deviceName)")
     }
     
     func controlDevice(_ device: GoveeDevice, brightness: Int) async throws {
@@ -464,11 +250,9 @@ class GoveeService: GoveeServiceProtocol, ObservableObject {
     
     private func sendControlCommand(device: GoveeDevice, capability: GoveeCapability) async throws {
         guard let apiKey = apiKey else {
-            print("❌ GoveeService: No API key available for device control")
             throw GoveeServiceError.notAuthenticated
         }
         
-        print("⏳ GoveeService: Waiting for rate limiter...")
         await rateLimiter.waitIfNeeded()
         
         let controlRequest = GoveeControlRequest(
@@ -480,45 +264,30 @@ class GoveeService: GoveeServiceProtocol, ObservableObject {
             )
         )
         
-        print("📤 GoveeService: Sending control command to \(device.deviceName) (SKU: \(device.sku), ID: \(device.id))")
-        print("📤 GoveeService: Capability: \(capability.type) - \(capability.instance)")
-        
         var request = URLRequest(url: URL(string: "\(baseURL)/router/api/v1/device/control")!)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "Govee-API-Key")
         request.httpBody = try JSONEncoder().encode(controlRequest)
         
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await URLSession.shared.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse else {
-            print("❌ GoveeService: Invalid response type")
             throw GoveeServiceError.invalidResponse
-        }
-        
-        print("📡 GoveeService: Received response with status code: \(httpResponse.statusCode)")
-        
-        // Print response body for debugging
-        if let responseString = String(data: data, encoding: .utf8) {
-            print("📄 GoveeService: Response body: \(responseString)")
         }
         
         switch httpResponse.statusCode {
         case 200:
-            print("✅ GoveeService: Successfully controlled device \(device.deviceName)")
             // Success - update device status locally
             updateDeviceStatus(device.id, isConnected: true)
             
         case 429:
-            print("⏰ GoveeService: Rate limit exceeded")
             throw GoveeServiceError.rateLimitExceeded
             
         case 404:
-            print("❌ GoveeService: Device not found")
             throw GoveeServiceError.deviceNotFound
             
         default:
-            print("❌ GoveeService: Control failed with status: \(httpResponse.statusCode)")
             throw GoveeServiceError.controlFailed
         }
     }
@@ -535,20 +304,11 @@ class GoveeService: GoveeServiceProtocol, ObservableObject {
 
 // MARK: - Supporting Types
 
-// Actual Govee API response structure based on the test
 private struct GoveeDeviceResponse: Codable {
-    let code: Int
-    let message: String
-    let data: [GoveeDevice]
+    let payload: GoveeDevicePayload
 }
 
-// Alternative response structure that might be used
-private struct GoveeDirectDeviceResponse: Codable {
-    let data: [GoveeDevice]
-}
-
-// Simple response structure
-private struct GoveeSimpleResponse: Codable {
+private struct GoveeDevicePayload: Codable {
     let devices: [GoveeDevice]
 }
 

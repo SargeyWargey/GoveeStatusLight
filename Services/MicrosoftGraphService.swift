@@ -314,19 +314,13 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
                 self.accessToken = accessToken
                 authenticationSubject.send(true)
                 connectionSubject.send(.connected)
-                print("📱 MicrosoftGraphService: Loaded stored tokens successfully")
-                
-                if let refreshToken = try KeychainService.retrieve(forAccount: KeychainService.Accounts.microsoftRefreshToken) {
-                    self.refreshToken = refreshToken
-                }
-            } else {
-                // No stored tokens, start with mock data for debugging
-                print("📱 MicrosoftGraphService: No stored tokens found, starting mock data for debugging")
-                startMockDataGeneration()
+            }
+            
+            if let refreshToken = try KeychainService.retrieve(forAccount: KeychainService.Accounts.microsoftRefreshToken) {
+                self.refreshToken = refreshToken
             }
         } catch {
-            print("❌ MicrosoftGraphService: Failed to load stored tokens: \(error.localizedDescription)")
-            startMockDataGeneration()
+            print("Failed to load stored tokens: \(error.localizedDescription)")
         }
     }
     
@@ -452,46 +446,6 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
         self.tokenExpirationDate = Date().addingTimeInterval(TimeInterval(tokenResponse.expiresIn))
         
         try storeTokensSecurely()
-    }
-    
-    
-    // MARK: - Mock Data for Debugging
-    private func startMockDataGeneration() {
-        authenticationSubject.send(false)
-        connectionSubject.send(.disconnected)
-        
-        // Generate mock Teams status for debugging
-        generateMockTeamsStatus()
-        
-        // Update mock status every 30 seconds to simulate real Teams behavior
-        Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
-            self?.generateMockTeamsStatus()
-        }
-    }
-    
-    private func generateMockTeamsStatus() {
-        let mockStatuses: [TeamsPresence] = [.available, .busy, .away, .inAMeeting, .inACall, .doNotDisturb]
-        let randomStatus = mockStatuses.randomElement() ?? .available
-        
-        let activities = [
-            "Working from home",
-            "In focus time",
-            "Available for chat",
-            "In a Teams meeting",
-            "On a phone call",
-            "Presenting",
-            "Away from desk"
-        ]
-        
-        let mockStatus = TeamsStatusInfo(
-            presence: randomStatus,
-            activity: activities.randomElement(),
-            lastActiveTime: Date(),
-            statusMessage: "Mock status for debugging"
-        )
-        
-        print("🧪 MicrosoftGraphService: Generated mock Teams status: \(randomStatus.displayName)")
-        statusSubject.send(mockStatus)
     }
 }
 
