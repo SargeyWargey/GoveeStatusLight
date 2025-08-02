@@ -136,5 +136,7 @@ extension KeychainService {
         static let selectedDevices = "selected_devices"
         static let deviceStates = "device_states"
         static let teamsPollingInterval = "teams_polling_interval"
+        static let meetingTrackerConfig = "meeting_tracker_config"
+        static let deviceAssignments = "device_assignments"
     }
 }

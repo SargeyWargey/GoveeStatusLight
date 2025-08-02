@@ -347,7 +347,7 @@ struct SettingsView: View {
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
                         if !viewModel.selectedDevices.isEmpty {
-                            Text("Selected devices can be assigned to Teams status or Meeting tracker")
+                            Text("Use the Settings window for device function assignment")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                                 .padding(.bottom, 4)
@@ -569,91 +569,7 @@ struct SettingsView: View {
         }
     }
     
-    // MARK: - Helper Functions for SettingsView
-    private func colorForAssignment(_ assignment: DeviceAssignment) -> Color {
-        switch assignment {
-        case .teamsStatus:
-            return Color.blue.opacity(0.2)
-        case .meetingTracker:
-            return Color.orange.opacity(0.2)
-        case .both:
-            return Color.purple.opacity(0.2)
-        }
-    }
     
-    @ViewBuilder
-    private func deviceRowContent(for device: GoveeDevice) -> some View {
-        HStack {
-            Image(systemName: viewModel.isDeviceSelected(device) ? "checkmark.circle.fill" : "circle")
-                .foregroundColor(viewModel.isDeviceSelected(device) ? .green : .secondary)
-            
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(device.deviceName)
-                        .font(.system(size: 12, weight: .medium))
-                    Spacer()
-                    if viewModel.isDeviceSelected(device) {
-                        deviceAssignmentBadge(for: device)
-                    }
-                }
-                
-                deviceInfoRow(for: device)
-            }
-        }
-    }
-    
-    @ViewBuilder
-    private func deviceAssignmentBadge(for device: GoveeDevice) -> some View {
-        let assignment = viewModel.getDeviceAssignment(device.id)
-        Text(assignment.displayName)
-            .font(.system(size: 10))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(colorForAssignment(assignment))
-            .cornerRadius(4)
-    }
-    
-    @ViewBuilder
-    private func deviceInfoRow(for device: GoveeDevice) -> some View {
-        HStack {
-            Text(device.sku)
-                .font(.system(size: 10))
-                .foregroundColor(.secondary)
-            
-            Spacer()
-            
-            Text(device.isConnected ? "Connected" : "Offline")
-                .font(.system(size: 10))
-                .foregroundColor(device.isConnected ? .green : .red)
-        }
-    }
-    
-    @ViewBuilder
-    private func deviceControls(for device: GoveeDevice) -> some View {
-        if viewModel.isDeviceSelected(device) {
-            Menu {
-                ForEach(DeviceAssignment.allCases, id: \.self) { assignment in
-                    Button(assignment.displayName) {
-                        viewModel.setDeviceAssignment(device.id, assignment: assignment)
-                    }
-                }
-            } label: {
-                Image(systemName: "gear")
-                    .foregroundColor(.blue)
-            }
-            .menuStyle(.borderlessButton)
-            
-            Button(action: {
-                Task {
-                    await viewModel.toggleDeviceActive(device)
-                }
-            }) {
-                Image(systemName: device.isActive ? "power.circle.fill" : "power.circle")
-                    .foregroundColor(device.isActive ? .green : .secondary)
-            }
-            .buttonStyle(.plain)
-        }
-    }
     
     private func colorForStatus(_ status: TeamsPresence) -> Color {
         let goveeColor = viewModel.colorMapping.colorForTeamsStatus(status)
@@ -1154,40 +1070,14 @@ struct SettingsWindowView: View {
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
                         if !viewModel.selectedDevices.isEmpty {
-                            Text("Selected devices can be assigned to Teams status or Meeting tracker")
+                            Text("Click the gear icon to assign devices to Teams status or Meeting tracker")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                                 .padding(.bottom, 4)
                         }
                         
                         ForEach(viewModel.availableDevices, id: \.id) { device in
-                            HStack {
-                                Button(action: {
-                                    viewModel.toggleDeviceSelection(device)
-                                }) {
-                                    HStack {
-                                        Image(systemName: viewModel.isDeviceSelected(device) ? "checkmark.circle.fill" : "circle")
-                                            .foregroundColor(viewModel.isDeviceSelected(device) ? .green : .secondary)
-                                        Text(device.deviceName)
-                                            .font(.system(size: 12, weight: .medium))
-                                        Spacer()
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                
-                                if viewModel.isDeviceSelected(device) {
-                                    Button(action: {
-                                        Task {
-                                            await viewModel.toggleDeviceActive(device)
-                                        }
-                                    }) {
-                                        Image(systemName: device.isActive ? "power.circle.fill" : "power.circle")
-                                            .foregroundColor(device.isActive ? .green : .secondary)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                            .padding(.vertical, 2)
+                            deviceRow(for: device)
                         }
                     }
                 }
@@ -1710,7 +1600,39 @@ struct SettingsWindowView: View {
                 deviceContent(for: device)
             }
             .buttonStyle(.plain)
+            
+            if viewModel.isDeviceSelected(device) {
+                HStack(spacing: 8) {
+                    // Assignment badge
+                    deviceAssignmentBadge(for: device)
+                    
+                    // Function assignment dropdown
+                    Menu {
+                        ForEach(DeviceAssignment.allCases, id: \.self) { assignment in
+                            Button(assignment.displayName) {
+                                viewModel.setDeviceAssignment(device.id, assignment: assignment)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "gear")
+                            .foregroundColor(.blue)
+                    }
+                    .menuStyle(.borderlessButton)
+                    
+                    // Power toggle
+                    Button(action: {
+                        Task {
+                            await viewModel.toggleDeviceActive(device)
+                        }
+                    }) {
+                        Image(systemName: device.isActive ? "power.circle.fill" : "power.circle")
+                            .foregroundColor(device.isActive ? .green : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
+        .padding(.vertical, 4)
     }
     
     private func deviceContent(for device: GoveeDevice) -> some View {
@@ -1727,10 +1649,6 @@ struct SettingsWindowView: View {
             deviceInfo(for: device)
             
             Spacer()
-            
-            if viewModel.isDeviceSelected(device) {
-                deviceAssignmentBadge(for: device)
-            }
         }
         .padding(.vertical, 4)
         .padding(.horizontal, 8)

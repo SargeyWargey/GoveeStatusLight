@@ -27,7 +27,8 @@ struct MenuBarContentView: View {
     
     var body: some View {
         SettingsView(viewModel: viewModel)
-            .frame(width: 400, height: 180)
+            .frame(width: 450)
+            .frame(minHeight: 250, maxHeight: 500)
             .background(
                 // Native macOS translucent material with proper blur
                 VisualEffectBlur(material: .menu, blendingMode: .behindWindow)
