@@ -347,7 +347,7 @@ struct SettingsView: View {
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
                         if !viewModel.selectedDevices.isEmpty {
-                            Text("Selected devices will sync with your Teams status")
+                            Text("Selected devices can be assigned to Teams status or Meeting tracker")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                                 .padding(.bottom, 4)
@@ -359,52 +359,28 @@ struct SettingsView: View {
                                     viewModel.toggleDeviceSelection(device)
                                 }) {
                                     HStack {
-                                        // Selection indicator
                                         Image(systemName: viewModel.isDeviceSelected(device) ? "checkmark.circle.fill" : "circle")
-                                            .foregroundColor(viewModel.isDeviceSelected(device) ? .blue : .secondary)
-                                        
-                                        // Connection status
-                                        Circle()
-                                            .fill(device.isConnected ? .green : .red)
-                                            .frame(width: 6, height: 6)
-                                        
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(device.deviceName)
-                                                .fontWeight(.medium)
-                                                .foregroundColor(.primary)
-                                            HStack {
-                                                Text(device.sku)
-                                                    .font(.caption)
-                                                    .foregroundColor(.secondary)
-                                                
-                                                // Show if device supports color
-                                                if device.capabilities.contains(where: { $0.type.contains("color_setting") }) {
-                                                    Image(systemName: "paintpalette.fill")
-                                                        .font(.caption2)
-                                                        .foregroundColor(.orange)
-                                                }
-                                            }
-                                        }
-                                        
+                                            .foregroundColor(viewModel.isDeviceSelected(device) ? .green : .secondary)
+                                        Text(device.deviceName)
+                                            .font(.system(size: 12, weight: .medium))
                                         Spacer()
-                                        
-                                        if viewModel.isDeviceSelected(device) {
-                                            Text("Teams Sync")
-                                                .font(.caption2)
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 2)
-                                                .background(.blue.opacity(0.2))
-                                                .foregroundColor(.blue)
-                                                .cornerRadius(4)
-                                        }
                                     }
-                                    .padding(.vertical, 4)
-                                    .padding(.horizontal, 8)
-                                    .background(viewModel.isDeviceSelected(device) ? Color.blue.opacity(0.1) : Color.clear)
-                                    .cornerRadius(8)
                                 }
                                 .buttonStyle(.plain)
+                                
+                                if viewModel.isDeviceSelected(device) {
+                                    Button(action: {
+                                        Task {
+                                            await viewModel.toggleDeviceActive(device)
+                                        }
+                                    }) {
+                                        Image(systemName: device.isActive ? "power.circle.fill" : "power.circle")
+                                            .foregroundColor(device.isActive ? .green : .secondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
+                            .padding(.vertical, 2)
                         }
                     }
                 }
@@ -594,6 +570,91 @@ struct SettingsView: View {
     }
     
     // MARK: - Helper Functions for SettingsView
+    private func colorForAssignment(_ assignment: DeviceAssignment) -> Color {
+        switch assignment {
+        case .teamsStatus:
+            return Color.blue.opacity(0.2)
+        case .meetingTracker:
+            return Color.orange.opacity(0.2)
+        case .both:
+            return Color.purple.opacity(0.2)
+        }
+    }
+    
+    @ViewBuilder
+    private func deviceRowContent(for device: GoveeDevice) -> some View {
+        HStack {
+            Image(systemName: viewModel.isDeviceSelected(device) ? "checkmark.circle.fill" : "circle")
+                .foregroundColor(viewModel.isDeviceSelected(device) ? .green : .secondary)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(device.deviceName)
+                        .font(.system(size: 12, weight: .medium))
+                    Spacer()
+                    if viewModel.isDeviceSelected(device) {
+                        deviceAssignmentBadge(for: device)
+                    }
+                }
+                
+                deviceInfoRow(for: device)
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func deviceAssignmentBadge(for device: GoveeDevice) -> some View {
+        let assignment = viewModel.getDeviceAssignment(device.id)
+        Text(assignment.displayName)
+            .font(.system(size: 10))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(colorForAssignment(assignment))
+            .cornerRadius(4)
+    }
+    
+    @ViewBuilder
+    private func deviceInfoRow(for device: GoveeDevice) -> some View {
+        HStack {
+            Text(device.sku)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+            
+            Spacer()
+            
+            Text(device.isConnected ? "Connected" : "Offline")
+                .font(.system(size: 10))
+                .foregroundColor(device.isConnected ? .green : .red)
+        }
+    }
+    
+    @ViewBuilder
+    private func deviceControls(for device: GoveeDevice) -> some View {
+        if viewModel.isDeviceSelected(device) {
+            Menu {
+                ForEach(DeviceAssignment.allCases, id: \.self) { assignment in
+                    Button(assignment.displayName) {
+                        viewModel.setDeviceAssignment(device.id, assignment: assignment)
+                    }
+                }
+            } label: {
+                Image(systemName: "gear")
+                    .foregroundColor(.blue)
+            }
+            .menuStyle(.borderlessButton)
+            
+            Button(action: {
+                Task {
+                    await viewModel.toggleDeviceActive(device)
+                }
+            }) {
+                Image(systemName: device.isActive ? "power.circle.fill" : "power.circle")
+                    .foregroundColor(device.isActive ? .green : .secondary)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+    
     private func colorForStatus(_ status: TeamsPresence) -> Color {
         let goveeColor = viewModel.colorMapping.colorForTeamsStatus(status)
         return goveeColor.color
@@ -610,6 +671,7 @@ struct SettingsView: View {
             viewModel.updateTeamsPollingInterval(interval)
         }
     }
+    
     
     private var teamsPollingIntervalView: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -792,6 +854,7 @@ struct SettingsWindowView: View {
                 
                 goveeConfigurationSection
                 teamsIntegrationSection
+                meetingTrackerSection
                 devicesSection
                 
                 // Error Display
@@ -1091,7 +1154,7 @@ struct SettingsWindowView: View {
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
                         if !viewModel.selectedDevices.isEmpty {
-                            Text("Selected devices will sync with your Teams status")
+                            Text("Selected devices can be assigned to Teams status or Meeting tracker")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                                 .padding(.bottom, 4)
@@ -1103,52 +1166,28 @@ struct SettingsWindowView: View {
                                     viewModel.toggleDeviceSelection(device)
                                 }) {
                                     HStack {
-                                        // Selection indicator
                                         Image(systemName: viewModel.isDeviceSelected(device) ? "checkmark.circle.fill" : "circle")
-                                            .foregroundColor(viewModel.isDeviceSelected(device) ? .blue : .secondary)
-                                        
-                                        // Connection status
-                                        Circle()
-                                            .fill(device.isConnected ? .green : .red)
-                                            .frame(width: 6, height: 6)
-                                        
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(device.deviceName)
-                                                .fontWeight(.medium)
-                                                .foregroundColor(.primary)
-                                            HStack {
-                                                Text(device.sku)
-                                                    .font(.caption)
-                                                    .foregroundColor(.secondary)
-                                                
-                                                // Show if device supports color
-                                                if device.capabilities.contains(where: { $0.type.contains("color_setting") }) {
-                                                    Image(systemName: "paintpalette.fill")
-                                                        .font(.caption2)
-                                                        .foregroundColor(.orange)
-                                                }
-                                            }
-                                        }
-                                        
+                                            .foregroundColor(viewModel.isDeviceSelected(device) ? .green : .secondary)
+                                        Text(device.deviceName)
+                                            .font(.system(size: 12, weight: .medium))
                                         Spacer()
-                                        
-                                        if viewModel.isDeviceSelected(device) {
-                                            Text("Teams Sync")
-                                                .font(.caption2)
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 2)
-                                                .background(.blue.opacity(0.2))
-                                                .foregroundColor(.blue)
-                                                .cornerRadius(4)
-                                        }
                                     }
-                                    .padding(.vertical, 4)
-                                    .padding(.horizontal, 8)
-                                    .background(viewModel.isDeviceSelected(device) ? Color.blue.opacity(0.1) : Color.clear)
-                                    .cornerRadius(8)
                                 }
                                 .buttonStyle(.plain)
+                                
+                                if viewModel.isDeviceSelected(device) {
+                                    Button(action: {
+                                        Task {
+                                            await viewModel.toggleDeviceActive(device)
+                                        }
+                                    }) {
+                                        Image(systemName: device.isActive ? "power.circle.fill" : "power.circle")
+                                            .foregroundColor(device.isActive ? .green : .secondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
+                            .padding(.vertical, 2)
                         }
                     }
                 }
@@ -1287,6 +1326,7 @@ struct SettingsWindowView: View {
         }
     }
     
+    
     private var teamsPollingIntervalView: some View {
         VStack(alignment: .leading, spacing: 8) {
             Divider()
@@ -1379,6 +1419,385 @@ struct SettingsWindowView: View {
             return .orange
         } else {
             return .red
+        }
+    }
+    
+    // MARK: - Meeting Tracker Section
+    private var meetingTrackerSection: some View {
+        GroupBox("Meeting Countdown Tracker") {
+            VStack(alignment: .leading, spacing: 12) {
+                // Enable/Disable Toggle
+                HStack {
+                    Toggle("Enable Meeting Countdown", isOn: Binding(
+                        get: { viewModel.meetingTracker.config.isEnabled },
+                        set: { newValue in
+                            var config = viewModel.meetingTracker.config
+                            config.isEnabled = newValue
+                            viewModel.updateMeetingTrackerConfig(config)
+                        }
+                    ))
+                    .toggleStyle(.checkbox)
+                    
+                    Spacer()
+                    
+                    // Status indicator
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(viewModel.meetingTracker.config.isEnabled ? .green : .gray)
+                            .frame(width: 8, height: 8)
+                        Text(viewModel.meetingTracker.config.isEnabled ? "Active" : "Disabled")
+                            .font(.caption)
+                    }
+                }
+                
+                if viewModel.meetingTracker.config.isEnabled {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Divider()
+                        
+                        // Next Meeting Info
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Next Meeting Info")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                            
+                            // Try meeting tracker first, then fall back to upcoming meeting from calendar
+                            let nextMeeting = viewModel.meetingTracker.currentState.nextMeeting ?? viewModel.upcomingMeeting
+                            let _ = print("🖥️ SettingsView: =================== MEETING DEBUG ===================")
+                            let _ = print("🖥️ SettingsView: Meeting Tracker enabled: \(viewModel.meetingTracker.config.isEnabled)")
+                            let _ = print("🖥️ SettingsView: Meeting Tracker nextMeeting: \(viewModel.meetingTracker.currentState.nextMeeting?.subject ?? "none")")
+                            let _ = print("🖥️ SettingsView: ViewModel upcomingMeeting: \(viewModel.upcomingMeeting?.subject ?? "none")")
+                            let _ = print("🖥️ SettingsView: ViewModel upcomingMeeting showAs: \(viewModel.upcomingMeeting?.showAs.rawValue ?? "none")")
+                            let _ = print("🖥️ SettingsView: ViewModel upcomingMeeting isUpcoming: \(viewModel.upcomingMeeting?.isUpcoming ?? false)")
+                            let _ = print("🖥️ SettingsView: Using meeting: \(nextMeeting?.subject ?? "none")")
+                            let _ = print("🖥️ SettingsView: ==================================================")
+                            
+                            if let nextMeeting = nextMeeting {
+                                let _ = print("🖥️ SettingsView: Displaying next meeting: '\(nextMeeting.subject)' in \(nextMeeting.minutesUntilStart) minutes")
+                                
+                                VStack(alignment: .leading, spacing: 8) {
+                                    // Meeting title and status
+                                    HStack(spacing: 8) {
+                                        Circle()
+                                            .fill(viewModel.meetingTracker.currentState.isActive && nextMeeting.id == viewModel.meetingTracker.currentState.nextMeeting?.id ? .orange : .blue)
+                                            .frame(width: 12, height: 12)
+                                        
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(nextMeeting.subject)
+                                                .font(.system(size: 14, weight: .medium))
+                                                .lineLimit(2)
+                                            
+                                            HStack {
+                                                if viewModel.meetingTracker.currentState.isActive && nextMeeting.id == viewModel.meetingTracker.currentState.nextMeeting?.id {
+                                                    Text("Countdown Active • \(Int(viewModel.meetingTracker.currentState.progressPercentage * 100))% filled")
+                                                        .font(.caption2)
+                                                        .foregroundColor(.orange)
+                                                } else {
+                                                    Text("Upcoming")
+                                                        .font(.caption2)
+                                                        .foregroundColor(.blue)
+                                                }
+                                            }
+                                        }
+                                        
+                                        Spacer()
+                                    }
+                                    
+                                    // Meeting details
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        // Time info
+                                        HStack {
+                                            Image(systemName: "clock")
+                                                .foregroundColor(.secondary)
+                                                .frame(width: 16)
+                                            Text("Starts in \(nextMeeting.minutesUntilStart) minutes")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        
+                                        // Start time
+                                        HStack {
+                                            Image(systemName: "calendar")
+                                                .foregroundColor(.secondary)
+                                                .frame(width: 16)
+                                            Text(formatMeetingTime(nextMeeting.startTime))
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        
+                                        // Duration
+                                        HStack {
+                                            Image(systemName: "timer")
+                                                .foregroundColor(.secondary)
+                                                .frame(width: 16)
+                                            Text(formatDuration(nextMeeting.duration))
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        
+                                        // Meeting type and status
+                                        HStack {
+                                            Image(systemName: "person.2")
+                                                .foregroundColor(.secondary)
+                                                .frame(width: 16)
+                                            Text("\(nextMeeting.meetingType.displayName) • \(nextMeeting.showAs.displayName)")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        
+                                        // Location if available
+                                        if let location = nextMeeting.location, !location.isEmpty {
+                                            HStack {
+                                                Image(systemName: "location")
+                                                    .foregroundColor(.secondary)
+                                                    .frame(width: 16)
+                                                Text(location)
+                                                    .font(.caption)
+                                                    .foregroundColor(.secondary)
+                                                    .lineLimit(1)
+                                            }
+                                        }
+                                        
+                                        // Progress bar for active countdown (only for tracked meetings)
+                                        if viewModel.meetingTracker.currentState.isActive && nextMeeting.id == viewModel.meetingTracker.currentState.nextMeeting?.id {
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                HStack {
+                                                    Text("Countdown Progress")
+                                                        .font(.caption2)
+                                                        .foregroundColor(.secondary)
+                                                    Spacer()
+                                                    Text("\(viewModel.meetingTracker.config.countdownDurationMinutes - viewModel.meetingTracker.currentState.minutesUntilMeeting) of \(viewModel.meetingTracker.config.countdownDurationMinutes) min")
+                                                        .font(.caption2)
+                                                        .foregroundColor(.orange)
+                                                }
+                                                
+                                                ProgressView(value: viewModel.meetingTracker.currentState.progressPercentage)
+                                                    .progressViewStyle(LinearProgressViewStyle(tint: .orange))
+                                                    .scaleEffect(y: 0.5)
+                                            }
+                                        }
+                                    }
+                                    .padding(.leading, 4)
+                                }
+                                .padding(12)
+                                .background((viewModel.meetingTracker.currentState.isActive && nextMeeting.id == viewModel.meetingTracker.currentState.nextMeeting?.id) ? Color.orange.opacity(0.1) : Color.blue.opacity(0.1))
+                                .cornerRadius(8)
+                            } else {
+                                let _ = print("🖥️ SettingsView: No next meeting to display - both meetingTracker.nextMeeting and viewModel.upcomingMeeting are nil")
+                                HStack {
+                                    Image(systemName: "calendar.badge.minus")
+                                        .foregroundColor(.secondary)
+                                    Text("No upcoming meetings")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                            }
+                        }
+                        
+                        Divider()
+                        
+                        // Countdown Duration
+                        HStack {
+                            Text("Countdown Duration:")
+                                .font(.subheadline)
+                            
+                            Stepper(value: Binding(
+                                get: { viewModel.meetingTracker.config.countdownDurationMinutes },
+                                set: { newValue in
+                                    var config = viewModel.meetingTracker.config
+                                    config.countdownDurationMinutes = newValue
+                                    viewModel.updateMeetingTrackerConfig(config)
+                                }
+                            ), in: 5...60, step: 5) {
+                                Text("\(viewModel.meetingTracker.config.countdownDurationMinutes) minutes")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                            }
+                        }
+                        
+                        // Color Configuration
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Light Colors")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                            
+                            HStack(spacing: 16) {
+                                // Idle Color (Color 1)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Idle Color")
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                    
+                                    HStack {
+                                        ColorPicker("Idle", selection: Binding(
+                                            get: { viewModel.meetingTracker.config.idleColor.color },
+                                            set: { newColor in
+                                                var config = viewModel.meetingTracker.config
+                                                config.idleColor = GoveeColorValue(color: newColor)
+                                                viewModel.updateMeetingTrackerConfig(config)
+                                            }
+                                        ))
+                                        .labelsHidden()
+                                        .frame(width: 40, height: 20)
+                                        
+                                        Text("RGB(\(viewModel.meetingTracker.config.idleColor.r), \(viewModel.meetingTracker.config.idleColor.g), \(viewModel.meetingTracker.config.idleColor.b))")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                
+                                // Meeting Color (Color 2)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Meeting Color")
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                    
+                                    HStack {
+                                        ColorPicker("Meeting", selection: Binding(
+                                            get: { viewModel.meetingTracker.config.meetingColor.color },
+                                            set: { newColor in
+                                                var config = viewModel.meetingTracker.config
+                                                config.meetingColor = GoveeColorValue(color: newColor)
+                                                viewModel.updateMeetingTrackerConfig(config)
+                                            }
+                                        ))
+                                        .labelsHidden()
+                                        .frame(width: 40, height: 20)
+                                        
+                                        Text("RGB(\(viewModel.meetingTracker.config.meetingColor.r), \(viewModel.meetingTracker.config.meetingColor.g), \(viewModel.meetingTracker.config.meetingColor.b))")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Description
+                        Text("Light strips will gradually fill with the meeting color as the countdown progresses. At the configured duration before a meeting, one end starts with the meeting color and spreads across the length until the meeting starts.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.top, 4)
+                    }
+                } else {
+                    Text("Enable this feature to show meeting countdowns on your Govee light strips with a progressive color fill effect.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding()
+        }
+    }
+    
+    // Helper function for device assignment colors
+    private func colorForAssignment(_ assignment: DeviceAssignment) -> Color {
+        switch assignment {
+        case .teamsStatus:
+            return .blue
+        case .meetingTracker:
+            return .orange
+        case .both:
+            return .purple
+        }
+    }
+    
+    // Extract device row to reduce complexity
+    private func deviceRow(for device: GoveeDevice) -> some View {
+        HStack {
+            Button(action: {
+                viewModel.toggleDeviceSelection(device)
+            }) {
+                deviceContent(for: device)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+    
+    private func deviceContent(for device: GoveeDevice) -> some View {
+        HStack {
+            // Selection indicator
+            Image(systemName: viewModel.isDeviceSelected(device) ? "checkmark.circle.fill" : "circle")
+                .foregroundColor(viewModel.isDeviceSelected(device) ? .blue : .secondary)
+            
+            // Connection status
+            Circle()
+                .fill(device.isConnected ? .green : .red)
+                .frame(width: 6, height: 6)
+            
+            deviceInfo(for: device)
+            
+            Spacer()
+            
+            if viewModel.isDeviceSelected(device) {
+                deviceAssignmentBadge(for: device)
+            }
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .background(viewModel.isDeviceSelected(device) ? Color.blue.opacity(0.1) : Color.clear)
+        .cornerRadius(8)
+    }
+    
+    private func deviceInfo(for device: GoveeDevice) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(device.deviceName)
+                .fontWeight(.medium)
+                .foregroundColor(.primary)
+            HStack {
+                Text(device.sku)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                // Show if device supports color
+                if device.capabilities.contains(where: { $0.type.contains("color_setting") }) {
+                    Image(systemName: "paintpalette.fill")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                }
+            }
+        }
+    }
+    
+    private func deviceAssignmentBadge(for device: GoveeDevice) -> some View {
+        let assignment = viewModel.getDeviceAssignment(device.id)
+        return Text(assignment.displayName)
+            .font(.caption2)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(colorForAssignment(assignment).opacity(0.2))
+            .foregroundColor(colorForAssignment(assignment))
+            .cornerRadius(4)
+    }
+    
+    private func formatMeetingTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) {
+            return "Today at \(formatter.string(from: date))"
+        } else if calendar.isDateInTomorrow(date) {
+            return "Tomorrow at \(formatter.string(from: date))"
+        } else {
+            formatter.dateStyle = .short
+            return formatter.string(from: date)
+        }
+    }
+    
+    private func formatDuration(_ duration: TimeInterval) -> String {
+        let minutes = Int(duration / 60)
+        let hours = minutes / 60
+        let remainingMinutes = minutes % 60
+        
+        if hours > 0 {
+            if remainingMinutes > 0 {
+                return "\(hours)h \(remainingMinutes)m"
+            } else {
+                return "\(hours)h"
+            }
+        } else {
+            return "\(minutes)m"
         }
     }
 }

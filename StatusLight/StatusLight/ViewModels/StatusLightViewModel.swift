@@ -24,11 +24,11 @@ class StatusLightViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var isRefreshingDevices = false
     @Published var teamsPollingInterval: Double = 15.0 // Default 15 seconds
+    @Published var meetingTracker = MeetingTracker()
     
     // MARK: - Services
     private let teamsService: TeamsServiceProtocol
     private let goveeService: GoveeServiceProtocol
-    private let calendarService: CalendarServiceProtocol
     
     // MARK: - Private Properties
     private var cancellables = Set<AnyCancellable>()
@@ -39,12 +39,10 @@ class StatusLightViewModel: ObservableObject {
     // MARK: - Initialization
     init(
         teamsService: TeamsServiceProtocol = TeamsService(),
-        goveeService: GoveeServiceProtocol = GoveeService(),
-        calendarService: CalendarServiceProtocol = CalendarService()
+        goveeService: GoveeServiceProtocol = GoveeService()
     ) {
         self.teamsService = teamsService
         self.goveeService = goveeService
-        self.calendarService = calendarService
         
         setupSubscriptions()
         startLightingEngine()
@@ -166,11 +164,8 @@ class StatusLightViewModel: ObservableObject {
     
     func refreshStatus() async {
         do {
-            async let teamsRefresh: () = teamsService.refreshStatus()
-            async let calendarRefresh: () = calendarService.refreshEvents()
-            
-            try await teamsRefresh
-            try await calendarRefresh
+            // Teams service now handles both status and calendar events
+            try await teamsService.refreshStatus()
         } catch {
             await MainActor.run {
                 self.errorMessage = "Failed to refresh status: \(error.localizedDescription)"
@@ -259,6 +254,31 @@ class StatusLightViewModel: ObservableObject {
         }
     }
     
+    // MARK: - Meeting Tracker Methods
+    func updateMeetingTrackerConfig(_ config: MeetingTrackerConfig) {
+        meetingTracker.updateConfig(config)
+        
+        // Trigger light update if meeting tracker is enabled
+        if config.isEnabled {
+            Task {
+                await updateLights()
+            }
+        }
+    }
+    
+    func setDeviceAssignment(_ deviceId: String, assignment: DeviceAssignment) {
+        meetingTracker.setDeviceAssignment(deviceId, assignment: assignment)
+        
+        // Trigger light update
+        Task {
+            await updateLights()
+        }
+    }
+    
+    func getDeviceAssignment(_ deviceId: String) -> DeviceAssignment {
+        return meetingTracker.getDeviceAssignment(deviceId)
+    }
+    
     // MARK: - Private Methods
     private func setupSubscriptions() {
         // Teams status subscription with immediate light updates
@@ -311,23 +331,52 @@ class StatusLightViewModel: ObservableObject {
             .store(in: &cancellables)
         
         // Calendar events subscription with immediate light updates
-        calendarService.upcomingEvents
+        teamsService.upcomingEvents
             .receive(on: DispatchQueue.main)
             .sink { [weak self] events in
+                print("🔔 StatusLightViewModel: *** FIXED DATA FLOW *** Received calendar events update - \(events.count) events")
+                
+                // Log all received events with detailed info
+                for (index, event) in events.enumerated() {
+                    print("🔔 StatusLightViewModel: Event \(index + 1): '\(event.subject)'")
+                    print("   - Start: \(event.startTime)")
+                    print("   - Show As: \(event.showAs)")
+                    print("   - Is Upcoming: \(event.isUpcoming)")
+                    print("   - Minutes Until Start: \(event.minutesUntilStart)")
+                }
+                
                 // Get the next upcoming meeting
                 let previousMeeting = self?.upcomingMeeting
-                let newMeeting = events.first { $0.isUpcoming && $0.showAs == .busy }
+                let upcomingEvents = events.filter { $0.isUpcoming }
+                
+                // Prioritize busy meetings, but include all upcoming meetings if no busy ones
+                let busyEvents = upcomingEvents.filter { $0.showAs == .busy }
+                let newMeeting = busyEvents.first ?? upcomingEvents.first
+                
+                print("🔔 StatusLightViewModel: All upcoming events: \(upcomingEvents.count)")
+                print("🔔 StatusLightViewModel: Busy upcoming events: \(busyEvents.count)")
+                print("🔔 StatusLightViewModel: Previous meeting: '\(previousMeeting?.subject ?? "none")'")
+                print("🔔 StatusLightViewModel: Selected meeting: '\(newMeeting?.subject ?? "none")' (showAs: \(newMeeting?.showAs.rawValue ?? "none"))")
+                
                 self?.upcomingMeeting = newMeeting
+                
+                // Update meeting tracker with new events
+                print("🔔 StatusLightViewModel: Updating meeting tracker with \(events.count) events")
+                self?.meetingTracker.updateUpcomingEvents(events)
                 
                 // Trigger immediate light update if meeting status changed
                 let previousMeetingState = self?.getMeetingState(for: previousMeeting)
                 let newMeetingState = self?.getMeetingState(for: newMeeting)
+                
+                print("🔔 StatusLightViewModel: Meeting states - previous: '\(previousMeetingState ?? "none")', new: '\(newMeetingState ?? "none")'")
                 
                 if previousMeetingState != newMeetingState {
                     print("📅 StatusLightViewModel: Meeting status changed from \(previousMeetingState ?? "none") to \(newMeetingState ?? "none") - updating lights immediately")
                     Task {
                         await self?.updateLights()
                     }
+                } else {
+                    print("🔔 StatusLightViewModel: Meeting state unchanged, no immediate light update needed")
                 }
             }
             .store(in: &cancellables)
@@ -383,53 +432,53 @@ class StatusLightViewModel: ObservableObject {
             return 
         }
         
-        let targetColor = determineTargetColor()
-        
-        print("💡 StatusLightViewModel: Current color: \(currentLightColor?.r ?? 0), \(currentLightColor?.g ?? 0), \(currentLightColor?.b ?? 0)")
-        print("💡 StatusLightViewModel: Target color: \(targetColor.r), \(targetColor.g), \(targetColor.b)")
-        print("💡 StatusLightViewModel: Selected devices: \(selectedDevices.count)")
-        for device in selectedDevices {
-            print("  - \(device.deviceName) (Connected: \(device.isConnected))")
-        }
-        
-        // Only update if color has changed
-        if currentLightColor != targetColor {
-            currentLightColor = targetColor
-            
-            print("🎨 StatusLightViewModel: Color changed! Sending commands to active devices...")
-            print("🎨 TERMINAL COLOR LOG: Lights changing from RGB(\(currentLightColor?.r ?? 0),\(currentLightColor?.g ?? 0),\(currentLightColor?.b ?? 0)) to RGB(\(targetColor.r),\(targetColor.g),\(targetColor.b))")
-            
-            // Update only active selected devices with concurrent batching
-            let activeDevices = selectedDevices.filter { $0.isActive }
-            print("💡 StatusLightViewModel: Updating \(activeDevices.count) active devices out of \(selectedDevices.count) selected")
-            
-            // Send all device commands concurrently to reduce total time
-            await withTaskGroup(of: Void.self) { group in
-                for device in activeDevices {
-                    group.addTask { [goveeService, weak self] in
-                        do {
-                            print("📡 StatusLightViewModel: Sending color RGB(\(targetColor.r),\(targetColor.g),\(targetColor.b)) to \(device.deviceName)")
-                            try await goveeService.controlDevice(device, color: targetColor)
-                            print("✅ TERMINAL COLOR LOG: Successfully changed \(device.deviceName) to RGB(\(targetColor.r),\(targetColor.g),\(targetColor.b))")
-                        } catch {
-                            print("❌ StatusLightViewModel: Failed to update \(device.deviceName): \(error.localizedDescription)")
-                            await MainActor.run {
-                                self?.errorMessage = "Failed to update \(device.deviceName): \(error.localizedDescription)"
-                            }
-                        }
-                    }
+        // Send all device commands concurrently to reduce total time
+        let activeDevices = selectedDevices.filter({ $0.isActive })
+        await withTaskGroup(of: Void.self) { group in
+            for device in activeDevices {
+                group.addTask { [device] in
+                    await self.updateSingleDevice(device)
                 }
             }
-        } else {
-            print("💡 StatusLightViewModel: Color unchanged RGB(\(targetColor.r),\(targetColor.g),\(targetColor.b)), skipping update")
         }
     }
     
-    private func determineTargetColor() -> GoveeColorValue {
-        // Priority system for determining light color
-        print("🎯 StatusLightViewModel: Determining target color...")
+    private func updateSingleDevice(_ device: GoveeDevice) async {
+        let assignment = meetingTracker.getDeviceAssignment(device.id)
+        var targetColor: GoveeColorValue
         
-        // 1. Meeting countdown (highest priority)
+        switch assignment {
+        case .teamsStatus:
+            targetColor = determineTeamsStatusColor()
+        case .meetingTracker:
+            targetColor = meetingTracker.calculateSingleDeviceColor(for: device.id)
+        case .both:
+            // For 'both', prioritize meeting tracker when active, otherwise use Teams status
+            if meetingTracker.currentState.isActive {
+                targetColor = meetingTracker.calculateSingleDeviceColor(for: device.id)
+            } else {
+                targetColor = determineTeamsStatusColor()
+            }
+        }
+        
+        print("💡 StatusLightViewModel: Device \(device.deviceName) (\(assignment.displayName)) - Target color: RGB(\(targetColor.r),\(targetColor.g),\(targetColor.b))")
+        
+        do {
+            try await goveeService.controlDevice(device, color: targetColor)
+            print("✅ TERMINAL COLOR LOG: Successfully changed \(device.deviceName) to RGB(\(targetColor.r),\(targetColor.g),\(targetColor.b))")
+        } catch {
+            print("❌ StatusLightViewModel: Failed to update \(device.deviceName): \(error.localizedDescription)")
+            await MainActor.run {
+                self.errorMessage = "Failed to update \(device.deviceName): \(error.localizedDescription)"
+            }
+        }
+    }
+    
+    private func determineTeamsStatusColor() -> GoveeColorValue {
+        // Determine color based on Teams status and legacy meeting countdown
+        print("🎯 StatusLightViewModel: Determining Teams status color...")
+        
+        // 1. Meeting countdown (highest priority) - for legacy support
         if let meeting = upcomingMeeting, meeting.isUpcoming {
             let minutesUntil = meeting.minutesUntilStart
             print("📅 StatusLightViewModel: Upcoming meeting found - \(minutesUntil) minutes until start")
@@ -644,20 +693,3 @@ class StatusLightViewModel: ObservableObject {
     }
 }
 
-// MARK: - Calendar Service
-protocol CalendarServiceProtocol {
-    var upcomingEvents: AnyPublisher<[CalendarEvent], Never> { get }
-    func refreshEvents() async throws
-}
-
-class CalendarService: CalendarServiceProtocol {
-    private let microsoftGraphService = MicrosoftGraphService()
-    
-    var upcomingEvents: AnyPublisher<[CalendarEvent], Never> {
-        microsoftGraphService.upcomingEvents
-    }
-    
-    func refreshEvents() async throws {
-        try await microsoftGraphService.refreshCalendarEvents()
-    }
-}

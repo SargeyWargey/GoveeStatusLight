@@ -10,6 +10,7 @@ import Combine
 
 protocol TeamsServiceProtocol {
     var currentStatus: AnyPublisher<TeamsStatusInfo?, Never> { get }
+    var upcomingEvents: AnyPublisher<[CalendarEvent], Never> { get }
     var isAuthenticated: AnyPublisher<Bool, Never> { get }
     var connectionStatus: AnyPublisher<ConnectionStatus, Never> { get }
     
@@ -64,6 +65,10 @@ class TeamsService: TeamsServiceProtocol, ObservableObject {
         microsoftGraphService.currentStatus
     }
     
+    var upcomingEvents: AnyPublisher<[CalendarEvent], Never> {
+        microsoftGraphService.upcomingEvents
+    }
+    
     var isAuthenticated: AnyPublisher<Bool, Never> {
         microsoftGraphService.isAuthenticated
     }
@@ -91,7 +96,21 @@ class TeamsService: TeamsServiceProtocol, ObservableObject {
     }
     
     func refreshStatus() async throws {
-        try await microsoftGraphService.refreshPresence()
+        print("🔄 TeamsService: Refreshing Teams status and calendar events")
+        
+        do {
+            print("🔄 TeamsService: Refreshing presence...")
+            try await microsoftGraphService.refreshPresence()
+            print("✅ TeamsService: Presence refresh completed")
+            
+            print("🔄 TeamsService: Refreshing calendar events...")
+            try await microsoftGraphService.refreshCalendarEvents()
+            print("✅ TeamsService: Calendar events refresh completed")
+            
+        } catch {
+            print("❌ TeamsService: Refresh failed: \(error.localizedDescription)")
+            throw error
+        }
     }
     
     func startMonitoring() {
@@ -118,17 +137,17 @@ class TeamsService: TeamsServiceProtocol, ObservableObject {
         // Create a timer that restarts the entire monitoring process at the specified interval
         await MainActor.run {
             monitoringTimer = Timer.scheduledTimer(withTimeInterval: pollingInterval, repeats: true) { [weak self] timer in
-                guard let strongSelf = self else { return }
-                print("🔄 TeamsService: \(strongSelf.pollingInterval)-second restart cycle triggered (valid: \(timer.isValid))")
-                print("🚀 TeamsService: Restarting Teams monitoring cycle...")
-                
-                Task { @MainActor [weak self] in
+                Task { @MainActor in
+                    guard let strongSelf = self else { return }
+                    print("🔄 TeamsService: \(strongSelf.pollingInterval)-second restart cycle triggered (valid: \(timer.isValid))")
+                    print("🚀 TeamsService: Restarting Teams monitoring cycle...")
+                    
                     do {
                         // Stop current monitoring (but don't invalidate the restart timer)
                         print("🔄 TeamsService: Refreshing Teams status...")
                         
                         // Fetch fresh status
-                        try await self?.refreshStatus()
+                        try await strongSelf.refreshStatus()
                         print("✅ TeamsService: Restart cycle status fetch completed")
                         
                     } catch {

@@ -36,7 +36,21 @@ struct CalendarEvent: Identifiable, Codable {
     }
     
     var isUpcoming: Bool {
-        startTime > Date()
+        let now = Date()
+        let isUpcoming = startTime > now
+        
+        // Add detailed logging for timezone debugging
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .medium
+        
+        print("⏰ CalendarEvent '\(subject)' isUpcoming check:")
+        print("   - Start time: \(formatter.string(from: startTime)) (\(startTime))")
+        print("   - Current time: \(formatter.string(from: now)) (\(now))")
+        print("   - Is upcoming: \(isUpcoming)")
+        print("   - Minutes until start: \(minutesUntilStart)")
+        
+        return isUpcoming
     }
 }
 

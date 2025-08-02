@@ -70,9 +70,47 @@ struct GraphEvent: Codable {
     let location: GraphLocation?
     let webLink: String?
     
+    private func parseGraphDateTime(_ graphDateTime: GraphDateTime) -> Date {
+        // Log the raw datetime info for debugging
+        print("🕐 MicrosoftGraphService: Parsing datetime - dateTime: '\(graphDateTime.dateTime)', timeZone: '\(graphDateTime.timeZone)'")
+        
+        // Create a date formatter that handles the Microsoft Graph format
+        let formatter = DateFormatter()
+        
+        // Microsoft Graph typically returns dates in format like "2023-08-02T14:30:00.0000000"
+        // with timezone info separate
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS"
+        
+        // Handle the timezone from Microsoft Graph
+        if let timeZone = TimeZone(identifier: graphDateTime.timeZone) {
+            formatter.timeZone = timeZone
+            print("🕐 MicrosoftGraphService: Using timezone: \(timeZone.identifier)")
+        } else {
+            print("⚠️ MicrosoftGraphService: Unknown timezone '\(graphDateTime.timeZone)', falling back to local timezone")
+            formatter.timeZone = TimeZone.current
+        }
+        
+        // Try to parse the date
+        if let parsedDate = formatter.date(from: graphDateTime.dateTime) {
+            print("🕐 MicrosoftGraphService: Parsed date: \(parsedDate) (local: \(parsedDate.description))")
+            return parsedDate
+        }
+        
+        // Fallback: try with a simpler format in case the microseconds are different
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+        if let parsedDate = formatter.date(from: String(graphDateTime.dateTime.prefix(19))) {
+            print("🕐 MicrosoftGraphService: Parsed date with fallback format: \(parsedDate)")
+            return parsedDate
+        }
+        
+        // Last resort: use ISO8601 formatter (UTC) and log the issue
+        print("❌ MicrosoftGraphService: Failed to parse datetime '\(graphDateTime.dateTime)', falling back to ISO8601 (UTC)")
+        return ISO8601DateFormatter().date(from: graphDateTime.dateTime) ?? Date()
+    }
+    
     func toCalendarEvent() -> CalendarEvent {
-        let startDate = ISO8601DateFormatter().date(from: start.dateTime) ?? Date()
-        let endDate = ISO8601DateFormatter().date(from: end.dateTime) ?? Date()
+        let startDate = parseGraphDateTime(start)
+        let endDate = parseGraphDateTime(end)
         
         return CalendarEvent(
             id: id,
@@ -435,32 +473,98 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
     }
     
     func refreshCalendarEvents() async throws {
+        print("📅 MicrosoftGraphService: Starting calendar events refresh")
+        
         if !isTokenValid() {
+            print("🔄 MicrosoftGraphService: Token invalid, refreshing...")
             try await refreshTokenIfNeeded()
+            print("✅ MicrosoftGraphService: Token refreshed successfully")
+        } else {
+            print("✅ MicrosoftGraphService: Token is valid")
         }
         
         guard let accessToken = accessToken else {
+            print("❌ MicrosoftGraphService: No access token available")
             throw MicrosoftGraphError.notAuthenticated
         }
         
+        // Use local timezone for the request to get properly localized times
+        let localTimeZone = TimeZone.current.identifier
         let startTime = ISO8601DateFormatter().string(from: Date())
         let endTime = ISO8601DateFormatter().string(from: Date().addingTimeInterval(24 * 60 * 60)) // Next 24 hours
         
+        print("📅 MicrosoftGraphService: Fetching calendar events from \(startTime) to \(endTime)")
+        print("📅 MicrosoftGraphService: Using local timezone: \(localTimeZone)")
+        
+        // Add timezone preference header to get times in local timezone context
         let url = URL(string: "\(baseURL)/me/calendar/calendarView?startDateTime=\(startTime)&endDateTime=\(endTime)&$orderby=start/dateTime")!
+        print("🌐 MicrosoftGraphService: Request URL: \(url.absoluteString)")
+        
         var request = URLRequest(url: url)
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
+        // Add timezone preference to get proper timezone information
+        request.setValue("outlook.timezone=\"\(localTimeZone)\"", forHTTPHeaderField: "Prefer")
+        
+        print("📡 MicrosoftGraphService: Sending calendar request to Microsoft Graph...")
         let (data, response) = try await URLSession.shared.data(for: request)
         
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            print("❌ MicrosoftGraphService: Invalid HTTP response")
             throw MicrosoftGraphError.invalidResponse
         }
         
-        let calendarResponse = try JSONDecoder().decode(GraphCalendarResponse.self, from: data)
-        let events = calendarResponse.value.map { $0.toCalendarEvent() }
-        eventsSubject.send(events)
+        print("📊 MicrosoftGraphService: HTTP Status Code: \(httpResponse.statusCode)")
+        print("📊 MicrosoftGraphService: Response data size: \(data.count) bytes")
+        
+        guard httpResponse.statusCode == 200 else {
+            print("❌ MicrosoftGraphService: HTTP Error \(httpResponse.statusCode)")
+            if let responseString = String(data: data, encoding: .utf8) {
+                print("📄 MicrosoftGraphService: Error response body: \(responseString)")
+            }
+            throw MicrosoftGraphError.invalidResponse
+        }
+        
+        print("🔍 MicrosoftGraphService: Parsing calendar response...")
+        do {
+            let calendarResponse = try JSONDecoder().decode(GraphCalendarResponse.self, from: data)
+            print("📅 MicrosoftGraphService: Raw events count: \(calendarResponse.value.count)")
+            
+            // Log each raw event
+            for (index, rawEvent) in calendarResponse.value.enumerated() {
+                print("📅 MicrosoftGraphService: Raw Event \(index + 1):")
+                print("   - Subject: \(rawEvent.subject)")
+                print("   - Start: \(rawEvent.start.dateTime)")
+                print("   - End: \(rawEvent.end.dateTime)")
+                print("   - Is All Day: \(rawEvent.isAllDay)")
+            }
+            
+            let events = calendarResponse.value.map { $0.toCalendarEvent() }
+            print("📅 MicrosoftGraphService: Converted to \(events.count) CalendarEvent objects")
+            
+            // Log each converted event
+            for (index, event) in events.enumerated() {
+                print("📅 MicrosoftGraphService: Converted Event \(index + 1):")
+                print("   - Subject: \(event.subject)")
+                print("   - Start Time: \(event.startTime)")
+                print("   - End Time: \(event.endTime)")
+                print("   - Is Upcoming: \(event.isUpcoming)")
+                print("   - Minutes Until Start: \(event.minutesUntilStart)")
+                print("   - Duration: \(event.duration) seconds")
+                print("   - Is All Day: \(event.isAllDay)")
+            }
+            
+            eventsSubject.send(events)
+            print("✅ MicrosoftGraphService: Calendar events successfully sent to subscribers")
+            
+        } catch {
+            print("❌ MicrosoftGraphService: Failed to decode calendar response: \(error)")
+            if let responseString = String(data: data, encoding: .utf8) {
+                print("📄 MicrosoftGraphService: Raw response for debugging: \(responseString)")
+            }
+            throw error
+        }
     }
     
     private func isTokenValid() -> Bool {
@@ -524,9 +628,17 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
         // Generate mock Teams status for debugging
         generateMockTeamsStatus()
         
+        // Generate mock calendar events for testing meeting countdown
+        generateMockCalendarEvents()
+        
         // Update mock status every 30 seconds to simulate real Teams behavior
         Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
             self?.generateMockTeamsStatus()
+        }
+        
+        // Update mock calendar events every 60 seconds
+        Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
+            self?.generateMockCalendarEvents()
         }
     }
     
@@ -553,6 +665,74 @@ class MicrosoftGraphService: NSObject, ObservableObject, @unchecked Sendable {
         
         print("🧪 MicrosoftGraphService: Generated mock Teams status: \(randomStatus.displayName)")
         statusSubject.send(mockStatus)
+    }
+    
+    private func generateMockCalendarEvents() {
+        let now = Date()
+        var mockEvents: [CalendarEvent] = []
+        
+        // Create a meeting that starts in 10 minutes (perfect for testing countdown)
+        let upcomingMeetingDuration = 30 * 60 // 30 minutes
+        let upcomingMeeting = CalendarEvent(
+            id: "mock-upcoming-meeting",
+            subject: "Team Standup",
+            startTime: now.addingTimeInterval(10 * 60), // 10 minutes from now
+            endTime: now.addingTimeInterval(40 * 60), // 30 minute meeting
+            isAllDay: false,
+            showAs: .busy,
+            isRecurring: false,
+            meetingType: MeetingType(duration: TimeInterval(upcomingMeetingDuration), isAllDay: false),
+            attendees: [
+                Attendee(name: "Test User", email: "user@example.com", responseStatus: .accepted),
+                Attendee(name: "Colleague", email: "colleague@example.com", responseStatus: .tentativelyAccepted)
+            ],
+            location: "Conference Room A / Teams",
+            webLink: "https://teams.microsoft.com/l/meetup-join/mock"
+        )
+        mockEvents.append(upcomingMeeting)
+        
+        // Create another meeting later today
+        let laterMeetingDuration = 60 * 60 // 1 hour
+        let laterMeeting = CalendarEvent(
+            id: "mock-later-meeting",
+            subject: "Project Review",
+            startTime: now.addingTimeInterval(2 * 60 * 60), // 2 hours from now
+            endTime: now.addingTimeInterval(3 * 60 * 60), // 1 hour meeting
+            isAllDay: false,
+            showAs: .busy,
+            isRecurring: false,
+            meetingType: MeetingType(duration: TimeInterval(laterMeetingDuration), isAllDay: false),
+            attendees: [
+                Attendee(name: "Manager", email: "manager@example.com", responseStatus: .organizer),
+                Attendee(name: "Teammate", email: "teammate@example.com", responseStatus: .accepted)
+            ],
+            location: "Meeting Room B",
+            webLink: nil
+        )
+        mockEvents.append(laterMeeting)
+        
+        // Create a meeting tomorrow
+        let tomorrowMeetingDuration = 60 * 60 // 1 hour
+        let tomorrowMeeting = CalendarEvent(
+            id: "mock-tomorrow-meeting",
+            subject: "Weekly Planning",
+            startTime: Calendar.current.date(byAdding: .day, value: 1, to: now) ?? now,
+            endTime: Calendar.current.date(byAdding: .day, value: 1, to: now.addingTimeInterval(60 * 60)) ?? now,
+            isAllDay: false,
+            showAs: .busy,
+            isRecurring: true,
+            meetingType: MeetingType(duration: TimeInterval(tomorrowMeetingDuration), isAllDay: false),
+            attendees: [
+                Attendee(name: "Team Lead", email: "team-lead@example.com", responseStatus: .organizer)
+            ],
+            location: "Teams",
+            webLink: "https://teams.microsoft.com/l/meetup-join/weekly"
+        )
+        mockEvents.append(tomorrowMeeting)
+        
+        print("🧪 MicrosoftGraphService: Generated \(mockEvents.count) mock calendar events")
+        print("   Next meeting: \(upcomingMeeting.subject) in \(upcomingMeeting.minutesUntilStart) minutes")
+        eventsSubject.send(mockEvents)
     }
 }
 
